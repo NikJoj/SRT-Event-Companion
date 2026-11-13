@@ -1,0 +1,293 @@
+<Application x:Class="Srt.EventCompanion.Desktop.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnMainWindowClose">
+  <!-- SRT design theme, shared by every window. Matches simracingtharavadu.in -->
+  <Application.Resources>
+
+    <!-- ── Fonts (bundled; SIL Open Font License) ── -->
+    <FontFamily x:Key="DisplayFont">pack://application:,,,/Assets/Fonts/#Bebas Neue</FontFamily>
+    <FontFamily x:Key="CondensedFont">pack://application:,,,/Assets/Fonts/#Barlow Condensed</FontFamily>
+    <FontFamily x:Key="BodyFont">pack://application:,,,/Assets/Fonts/#Barlow</FontFamily>
+    <FontFamily x:Key="BodySemiFont">pack://application:,,,/Assets/Fonts/#Barlow SemiBold</FontFamily>
+    <FontFamily x:Key="MonoFont">Consolas</FontFamily>
+
+    <!-- ── Colours ── -->
+    <SolidColorBrush x:Key="Bg" Color="#080A0C"/>
+    <SolidColorBrush x:Key="Bg2" Color="#0E1114"/>
+    <SolidColorBrush x:Key="Bg3" Color="#161A1F"/>
+    <SolidColorBrush x:Key="FieldBg" Color="#11151A"/>
+    <SolidColorBrush x:Key="Line" Color="#1F242B"/>
+    <SolidColorBrush x:Key="LineStrong" Color="#2C323B"/>
+    <SolidColorBrush x:Key="Text" Color="#E8EAF0"/>
+    <SolidColorBrush x:Key="Muted" Color="#8A919C"/>
+    <SolidColorBrush x:Key="Red" Color="#E8001D"/>
+    <SolidColorBrush x:Key="RedHover" Color="#FF1A36"/>
+    <SolidColorBrush x:Key="RedDim" Color="#9B0014"/>
+    <SolidColorBrush x:Key="Gold" Color="#F5A623"/>
+    <SolidColorBrush x:Key="Danger" Color="#FF4D5E"/>
+
+    <!-- ── Text ── -->
+    <Style x:Key="Kicker" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="{StaticResource CondensedFont}"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Foreground" Value="{StaticResource Red}"/>
+      <Setter Property="Margin" Value="0,0,0,2"/>
+    </Style>
+    <Style x:Key="StepHeading" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="{StaticResource DisplayFont}"/>
+      <Setter Property="FontSize" Value="44"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="Margin" Value="0,0,0,4"/>
+    </Style>
+    <Style x:Key="CardHeading" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="{StaticResource DisplayFont}"/>
+      <Setter Property="FontSize" Value="26"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+    </Style>
+    <Style x:Key="FieldLabel" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="{StaticResource CondensedFont}"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+      <Setter Property="Margin" Value="0,0,0,6"/>
+    </Style>
+    <Style x:Key="Hint" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="{StaticResource BodyFont}"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+    <Style x:Key="ErrorText" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="{StaticResource BodySemiFont}"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Foreground" Value="{StaticResource Danger}"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Margin" Value="0,0,0,12"/>
+    </Style>
+    <Style x:Key="StatusLabel" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="{StaticResource BodyFont}"/>
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style x:Key="StatusValue" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="{StaticResource CondensedFont}"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+      <Setter Property="HorizontalAlignment" Value="Right"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- ── Cards ── -->
+    <Style x:Key="Card" TargetType="Border">
+      <Setter Property="Background" Value="{StaticResource Bg2}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="20"/>
+    </Style>
+    <!-- The thin red bar on top of a card, like the site's modals -->
+    <Style x:Key="CardAccent" TargetType="Border">
+      <Setter Property="Height" Value="3"/>
+      <Setter Property="Background" Value="{StaticResource Red}"/>
+      <Setter Property="VerticalAlignment" Value="Top"/>
+    </Style>
+
+    <!-- ── Text fields ── -->
+    <Style x:Key="Field" TargetType="TextBox">
+      <Setter Property="Background" Value="{StaticResource FieldBg}"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource LineStrong}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="12,9"/>
+      <Setter Property="FontFamily" Value="{StaticResource BodyFont}"/>
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="CaretBrush" Value="{StaticResource Red}"/>
+      <Setter Property="SelectionBrush" Value="{StaticResource Red}"/>
+      <Setter Property="Margin" Value="0,0,0,16"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TextBox">
+            <Border x:Name="Frame" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
+              <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" Focusable="False"
+                            HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Frame" Property="BorderBrush" Value="#3A414C"/>
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="Frame" Property="BorderBrush" Value="#E8001D"/>
+              </Trigger>
+              <Trigger Property="IsReadOnly" Value="True">
+                <Setter TargetName="Frame" Property="Background" Value="#0B0E11"/>
+                <Setter Property="Foreground" Value="#B9BEC7"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- ── Buttons: slanted, like the site ── -->
+    <ControlTemplate x:Key="SlantedButton" TargetType="Button">
+      <Grid Background="Transparent">
+        <Border x:Name="Shape" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}" RenderTransformOrigin="0.5,0.5" Margin="5,0">
+          <Border.RenderTransform>
+            <SkewTransform AngleX="-14"/>
+          </Border.RenderTransform>
+        </Border>
+        <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                          RecognizesAccessKey="True"/>
+      </Grid>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsEnabled" Value="False">
+          <Setter Property="Opacity" Value="0.4"/>
+        </Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate>
+
+    <Style x:Key="PrimaryBtn" TargetType="Button">
+      <Setter Property="Template" Value="{StaticResource SlantedButton}"/>
+      <Setter Property="Background" Value="{StaticResource Red}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Red}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="FontFamily" Value="{StaticResource CondensedFont}"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="FontSize" Value="16"/>
+      <Setter Property="Padding" Value="28,11"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="Background" Value="{StaticResource RedHover}"/>
+        </Trigger>
+        <Trigger Property="IsPressed" Value="True">
+          <Setter Property="Background" Value="{StaticResource RedDim}"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style x:Key="SecondaryBtn" TargetType="Button">
+      <Setter Property="Template" Value="{StaticResource SlantedButton}"/>
+      <Setter Property="Background" Value="{StaticResource Bg3}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource LineStrong}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="{StaticResource CondensedFont}"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="Padding" Value="22,10"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="BorderBrush" Value="{StaticResource Red}"/>
+        </Trigger>
+        <Trigger Property="IsPressed" Value="True">
+          <Setter Property="Background" Value="#20262E"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style x:Key="FavouriteChip" TargetType="Button" BasedOn="{StaticResource SecondaryBtn}">
+      <Setter Property="Margin" Value="0,0,4,8"/>
+      <Setter Property="Padding" Value="18,8"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="Foreground" Value="{StaticResource Gold}"/>
+    </Style>
+
+    <!-- ── Lists ── -->
+    <Style x:Key="DarkListItem" TargetType="ListBoxItem">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="{StaticResource BodyFont}"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="Padding" Value="14,10"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="Bd" Background="Transparent" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+              <Grid>
+                <Border x:Name="Marker" Width="3" HorizontalAlignment="Left" Background="Transparent"/>
+                <ContentPresenter Margin="{TemplateBinding Padding}"/>
+              </Grid>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#161A1F"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#22141A"/>
+                <Setter TargetName="Marker" Property="Background" Value="#E8001D"/>
+                <Setter Property="Foreground" Value="White"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- ── Slim dark scrollbars everywhere ── -->
+    <Style x:Key="ScrollThumb" TargetType="Thumb">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Thumb">
+            <Border x:Name="T" Background="#2C323B" CornerRadius="3"/>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="T" Property="Background" Value="#4A525E"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ScrollBar">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Width" Value="8"/>
+      <Setter Property="MinWidth" Value="8"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Track x:Name="PART_Track" IsDirectionReversed="True" Margin="1">
+              <Track.Thumb>
+                <Thumb Style="{StaticResource ScrollThumb}"/>
+              </Track.Thumb>
+            </Track>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="Orientation" Value="Horizontal">
+          <Setter Property="Width" Value="Auto"/>
+          <Setter Property="MinWidth" Value="0"/>
+          <Setter Property="Height" Value="8"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="ScrollBar">
+                <Track x:Name="PART_Track" IsDirectionReversed="False" Margin="1">
+                  <Track.Thumb>
+                    <Thumb Style="{StaticResource ScrollThumb}"/>
+                  </Track.Thumb>
+                </Track>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style TargetType="ToolTip">
+      <Setter Property="Background" Value="{StaticResource Bg3}"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource LineStrong}"/>
+      <Setter Property="FontFamily" Value="{StaticResource BodyFont}"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Padding" Value="10,6"/>
+    </Style>
+  </Application.Resources>
+</Application>

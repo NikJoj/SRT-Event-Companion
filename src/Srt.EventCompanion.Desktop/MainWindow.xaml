@@ -1,0 +1,314 @@
+<Window x:Class="Srt.EventCompanion.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SRT Event Companion"
+        Icon="pack://application:,,,/Assets/app.ico"
+        Width="1120" Height="760" MinWidth="980" MinHeight="680"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource Bg}" Foreground="{StaticResource Text}"
+        FontFamily="{StaticResource BodyFont}"
+        TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="72"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="34"/>
+    </Grid.RowDefinitions>
+
+    <!-- ═══ BRAND HEADER ═══ -->
+    <Border Grid.Row="0" Background="{StaticResource Bg2}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+      <Grid Margin="28,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <Image Source="pack://application:,,,/Assets/srt-labs-logo.png" Height="42" VerticalAlignment="Center"
+               RenderOptions.BitmapScalingMode="HighQuality" ToolTip="SRT Labs"/>
+        <Border Grid.Column="1" Width="1" Height="32" Background="{StaticResource LineStrong}" Margin="20,0"/>
+        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+          <TextBlock Text="SRT EVENT COMPANION" FontFamily="{StaticResource DisplayFont}" FontSize="28" Foreground="{StaticResource Text}"/>
+          <TextBlock Text="KERALA RACE WARS" Style="{StaticResource Kicker}" FontSize="12" Margin="0,-4,0,0"/>
+        </StackPanel>
+        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+          <Button x:Name="UpdateBtn" Visibility="Collapsed" Style="{StaticResource PrimaryBtn}" FontSize="14" Padding="18,8"
+                  Margin="0,0,22,0" VerticalAlignment="Center" Click="InstallUpdate_Click"
+                  ToolTip="A newer version was published by SRT. Installing takes about a minute and reopens the app."/>
+          <StackPanel VerticalAlignment="Center">
+            <TextBlock Text="RIG" Style="{StaticResource FieldLabel}" HorizontalAlignment="Right" Margin="0"/>
+            <TextBlock x:Name="RigLabel" Text="Not paired" HorizontalAlignment="Right"
+                       FontFamily="{StaticResource DisplayFont}" FontSize="24" Foreground="{StaticResource Text}"/>
+          </StackPanel>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ═══ STEPS (one visible at a time) ═══ -->
+    <Grid Grid.Row="1">
+      <!-- soft red glow, like the site hero -->
+      <Grid.Background>
+        <RadialGradientBrush Center="0.88,0.35" GradientOrigin="0.88,0.35" RadiusX="0.55" RadiusY="0.8">
+          <GradientStop Color="#2A0A10" Offset="0"/>
+          <GradientStop Color="#080A0C" Offset="1"/>
+        </RadialGradientBrush>
+      </Grid.Background>
+
+      <!-- ── STEP 1: RIG CHECK ── -->
+      <Grid x:Name="StepInit" Visibility="Visible">
+        <StackPanel Width="620" HorizontalAlignment="Center" VerticalAlignment="Center">
+          <TextBlock Text="RIG CHECK" Style="{StaticResource Kicker}"/>
+          <TextBlock Text="INITIALISING RIG" Style="{StaticResource StepHeading}"/>
+          <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,22"
+                     Text="Checking this rig's SRT registration, Assetto Corsa and the signed-in Steam account."/>
+
+          <Grid Margin="0,0,0,18">
+            <Border Style="{StaticResource Card}" Padding="22,10">
+              <StackPanel>
+                <Grid Height="46">
+                  <TextBlock Text="Rig registration" Style="{StaticResource StatusLabel}"/>
+                  <TextBlock x:Name="StatusRig" Text="Checking…" Style="{StaticResource StatusValue}"/>
+                </Grid>
+                <Border Height="1" Background="{StaticResource Line}"/>
+                <Grid Height="46">
+                  <TextBlock Text="Assetto Corsa installation" Style="{StaticResource StatusLabel}"/>
+                  <TextBlock x:Name="StatusAC" Text="Checking…" Style="{StaticResource StatusValue}"/>
+                </Grid>
+                <Border Height="1" Background="{StaticResource Line}"/>
+                <Grid Height="46">
+                  <TextBlock Text="Steam account" Style="{StaticResource StatusLabel}"/>
+                  <TextBlock x:Name="StatusSteam" Text="Checking…" Style="{StaticResource StatusValue}"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardAccent}"/>
+          </Grid>
+
+          <TextBlock x:Name="InitError" Style="{StaticResource ErrorText}" Visibility="Collapsed"/>
+
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,6,0,0">
+            <Button Content="CHECK AGAIN" Style="{StaticResource SecondaryBtn}" Click="CheckAgain_Click" Margin="0,0,8,0"/>
+            <Button Content="PAIR THIS RIG" Style="{StaticResource SecondaryBtn}" Click="PairRig_Click" Margin="0,0,8,0"/>
+            <Button x:Name="ProceedBtn" Content="CONTINUE  →" Style="{StaticResource PrimaryBtn}" Click="Proceed_Click" IsEnabled="False"/>
+          </StackPanel>
+        </StackPanel>
+      </Grid>
+
+      <!-- ── STEP 2: DRIVER (left: pick / details · right: raced at this centre) ── -->
+      <Grid x:Name="StepDriver" Visibility="Collapsed" Margin="36,26,36,22">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="1.15*"/>
+          <ColumnDefinition Width="28"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Grid Grid.Column="0">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,10,0">
+            <StackPanel>
+              <TextBlock Text="DRIVER" Style="{StaticResource Kicker}"/>
+              <TextBlock Text="WHO'S DRIVING?" Style="{StaticResource StepHeading}"/>
+              <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,20"
+                         Text="Pick a favourite or a driver who has raced here. Not listed? Search SRT by their exact username, or add a new driver."/>
+
+              <TextBlock Text="FAVOURITES" Style="{StaticResource FieldLabel}"/>
+              <WrapPanel x:Name="FavouritesPanel" Margin="-5,0,0,2"/>
+              <TextBlock x:Name="FavouritesHint" Style="{StaticResource Hint}" Margin="0,0,0,18"
+                         Text="No favourites yet. Select a driver, then choose ☆ Favourite to keep them here (up to 5)."/>
+
+              <TextBlock Text="FIND DRIVER" Style="{StaticResource FieldLabel}"/>
+              <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="SearchInput" Style="{StaticResource Field}" Margin="0" KeyDown="SearchInput_KeyDown" TextChanged="SearchInput_TextChanged"
+                         ToolTip="Type part of a name to filter the list on the right, or an exact Discord / SRT username for Search SRT"/>
+                <Button x:Name="SearchBtn" Grid.Column="1" Content="SEARCH SRT" Style="{StaticResource SecondaryBtn}" Margin="8,0,0,0" Click="SearchDriver_Click"
+                        ToolTip="Look up an exact Discord or SRT username across all of SRT"/>
+                <Button x:Name="NewDriverBtn" Grid.Column="2" Content="+ NEW DRIVER" Style="{StaticResource SecondaryBtn}" Margin="2,0,0,0" Click="NewDriver_Click"/>
+              </Grid>
+              <TextBlock x:Name="SearchStatus" Style="{StaticResource Hint}" Visibility="Collapsed" Margin="0,0,0,10"/>
+
+              <Grid x:Name="DriverPanel" Visibility="Collapsed" Margin="0,8,0,18">
+                <Border Style="{StaticResource Card}" Padding="18,16">
+                  <StackPanel>
+                    <Grid Margin="0,0,0,12">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock x:Name="DriverPanelTitle" FontFamily="{StaticResource DisplayFont}" FontSize="24"
+                                 Foreground="{StaticResource Text}" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                      <Button x:Name="FavouriteBtn" Grid.Column="1" Style="{StaticResource SecondaryBtn}" Margin="10,0,0,0"
+                              Foreground="{StaticResource Gold}" Visibility="Collapsed" Click="ToggleFavourite_Click"/>
+                    </Grid>
+                    <TextBlock Text="SRT USERNAME" Style="{StaticResource FieldLabel}"/>
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Text="@" FontFamily="{StaticResource DisplayFont}" FontSize="24" Foreground="{StaticResource Red}"
+                                 VerticalAlignment="Top" Margin="0,6,8,0"/>
+                      <TextBox x:Name="SrtUsernameInput" Grid.Column="1" Style="{StaticResource Field}" Margin="0,0,0,6" CharacterCasing="Lower"/>
+                    </Grid>
+                    <TextBlock x:Name="SrtUsernameHint" Style="{StaticResource Hint}"/>
+                  </StackPanel>
+                </Border>
+                <Border Style="{StaticResource CardAccent}"/>
+              </Grid>
+
+              <TextBlock Text="IN-GAME DISPLAY NAME  (SHOWN ON THE SERVER)" Style="{StaticResource FieldLabel}"/>
+              <TextBox x:Name="DisplayNameInput" Style="{StaticResource Field}"/>
+
+              <TextBlock x:Name="DriverError" Style="{StaticResource ErrorText}" Visibility="Collapsed"/>
+            </StackPanel>
+          </ScrollViewer>
+
+          <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="←  BACK" Style="{StaticResource SecondaryBtn}" Click="BackToInit_Click" Margin="0,0,8,0"/>
+            <Button x:Name="PreviewBtn" Content="PREVIEW  →" Style="{StaticResource PrimaryBtn}" Click="PreviewJoin_Click"/>
+          </StackPanel>
+        </Grid>
+
+        <!-- Right: drivers who have raced at this centre (filtered by the Find driver box) -->
+        <Grid Grid.Column="2">
+          <Border Style="{StaticResource Card}" Padding="0">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <StackPanel Margin="20,18,20,12">
+                <TextBlock Text="RACED AT THIS CENTRE" Style="{StaticResource CardHeading}"/>
+                <TextBlock x:Name="DriverListLabel" Style="{StaticResource Hint}" Margin="0,2,0,0"/>
+              </StackPanel>
+              <Border Grid.Row="1" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+                <ListBox x:Name="DriverMatchesList" Visibility="Collapsed" Background="Transparent" BorderThickness="0"
+                         Foreground="{StaticResource Text}" SelectionChanged="DriverMatch_Selected"
+                         ItemContainerStyle="{StaticResource DarkListItem}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+              </Border>
+            </Grid>
+          </Border>
+          <Border Style="{StaticResource CardAccent}"/>
+        </Grid>
+      </Grid>
+
+      <!-- ── STEP 3: SESSION (left: details, password · right: lap times) ── -->
+      <Grid x:Name="StepLaunch" Visibility="Collapsed" Margin="36,26,36,22">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="1.15*"/>
+          <ColumnDefinition Width="28"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Grid Grid.Column="0">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,10,0">
+            <StackPanel>
+              <TextBlock Text="SESSION" Style="{StaticResource Kicker}"/>
+              <TextBlock x:Name="LaunchHeading" Text="READY TO LAUNCH" Style="{StaticResource StepHeading}"/>
+              <TextBlock x:Name="LaunchHint" Style="{StaticResource Hint}" Margin="0,0,0,18"
+                         Text="Review the details below, then launch Content Manager to begin the session."/>
+
+              <Border x:Name="PasswordPanel" Visibility="Collapsed" Background="#17120A" BorderBrush="{StaticResource Gold}"
+                      BorderThickness="1" Padding="18,14" Margin="0,0,0,16">
+                <StackPanel>
+                  <TextBlock Text="SERVER PASSWORD" Style="{StaticResource FieldLabel}" Foreground="{StaticResource Gold}"/>
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="PasswordText" IsReadOnly="True" Background="Transparent" BorderThickness="0"
+                             Foreground="White" FontSize="28" FontFamily="{StaticResource MonoFont}" VerticalAlignment="Center"/>
+                    <Button Grid.Column="1" Content="COPY" Style="{StaticResource SecondaryBtn}" Click="CopyPassword_Click"/>
+                  </Grid>
+                  <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
+                             Text="Content Manager asks for this when joining. Type or paste it there."/>
+                </StackPanel>
+              </Border>
+
+              <Grid Margin="0,0,0,16">
+                <Border Style="{StaticResource Card}" Padding="18,14">
+                  <StackPanel>
+                    <TextBlock Text="SESSION DETAILS" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="PreviewOutput" IsReadOnly="True" TextWrapping="Wrap" Background="Transparent"
+                             Foreground="#C9CED6" BorderThickness="0" FontSize="13" FontFamily="{StaticResource MonoFont}"/>
+                  </StackPanel>
+                </Border>
+                <Border Style="{StaticResource CardAccent}"/>
+              </Grid>
+
+              <TextBlock x:Name="SyncStatus" Style="{StaticResource Hint}" FontFamily="{StaticResource BodySemiFont}" Margin="0,0,0,8"/>
+              <TextBlock x:Name="LaunchError" Style="{StaticResource ErrorText}" Visibility="Collapsed"/>
+            </StackPanel>
+          </ScrollViewer>
+
+          <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button x:Name="EditDriverBtn" Content="←  EDIT DRIVER" Style="{StaticResource SecondaryBtn}" Click="BackToDriver_Click" Margin="0,0,8,0"/>
+            <Button x:Name="EndSessionBtn" Content="END SESSION &amp; RESTORE" Style="{StaticResource PrimaryBtn}" Click="EndSession_Click" Margin="0,0,8,0"/>
+            <Button x:Name="LaunchBtn" Content="LAUNCH CONTENT MANAGER" Style="{StaticResource PrimaryBtn}" Click="Launch_Click"/>
+          </StackPanel>
+        </Grid>
+
+        <!-- Right: live lap times -->
+        <Grid Grid.Column="2">
+          <Border Style="{StaticResource Card}">
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock Text="LAP TIMES" Style="{StaticResource CardHeading}" HorizontalAlignment="Center" Foreground="{StaticResource Muted}"/>
+              <TextBlock Style="{StaticResource Hint}" TextAlignment="Center" Margin="30,4,30,0"
+                         Text="Lap times appear here once the session starts and the driver is on track."/>
+            </StackPanel>
+          </Border>
+          <Border x:Name="LapPanel" Visibility="Collapsed" Style="{StaticResource Card}">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <Grid>
+                <TextBlock Text="LAP TIMES" Style="{StaticResource CardHeading}"/>
+                <TextBlock x:Name="LapStatus" HorizontalAlignment="Right" VerticalAlignment="Center"
+                           FontFamily="{StaticResource CondensedFont}" FontWeight="Bold" FontSize="14" Foreground="{StaticResource Muted}"/>
+              </Grid>
+              <TextBlock x:Name="LapSummary" Grid.Row="1" FontFamily="{StaticResource DisplayFont}" FontSize="34"
+                         Foreground="{StaticResource Text}" Margin="0,10,0,10"/>
+              <Border Grid.Row="2" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="0,12,0,0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                  <TextBlock x:Name="LapList" FontSize="15" FontFamily="{StaticResource MonoFont}" Foreground="#C9CED6"
+                             TextWrapping="Wrap" LineHeight="26"/>
+                </ScrollViewer>
+              </Border>
+            </Grid>
+          </Border>
+          <Border Style="{StaticResource CardAccent}"/>
+        </Grid>
+      </Grid>
+    </Grid>
+
+    <!-- ═══ FOOTER ═══ -->
+    <Border Grid.Row="2" Background="{StaticResource Bg2}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+      <Grid Margin="28,0">
+        <TextBlock VerticalAlignment="Center" FontFamily="{StaticResource CondensedFont}" FontWeight="Bold" FontSize="12" Foreground="{StaticResource Muted}">
+          <Run Text="SRT EVENT COMPANION"/><Run Text="  ·  BY " /><Run Text="SRT LABS" Foreground="{StaticResource Gold}"/>
+        </TextBlock>
+        <TextBlock HorizontalAlignment="Right" VerticalAlignment="Center" FontFamily="{StaticResource CondensedFont}" FontWeight="Bold"
+                   FontSize="12" Foreground="{StaticResource Muted}">
+          <Run x:Name="VersionText" Text="V0.0.0"/><Run Text="  ·  SIMRACINGTHARAVADU.IN"/>
+        </TextBlock>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>
