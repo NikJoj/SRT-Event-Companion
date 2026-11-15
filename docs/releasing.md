@@ -28,8 +28,9 @@ Only one copy runs at a time: opening it again brings the running window to the 
 2. Upload the setup file to a public https address (for example a GitHub release on a public repository).
 3. Admin → Kerala Race Wars → **Companion app release** → **Publish new version**: version, download link, SHA-256.
 
-Each rig checks at start-up, after every End Session and every 30 minutes. It installs on its own only when
-nobody is using it (on the rig-check screen, or between drivers). Otherwise staff see **Update to vX** in the header.
+Each rig checks at start-up and after every End Session (there is no background polling, so the free database can
+sleep while rigs are idle). It installs on its own only when nobody is using it (on the rig-check screen, or between
+drivers). Otherwise staff see **Update to vX** in the header. To push an update to an idle rig, restart the app.
 It never updates during a session. The download is refused unless its SHA-256 matches what you published.
 The Rigs table in admin shows each rig's version and **Update pending** until it has updated.
 

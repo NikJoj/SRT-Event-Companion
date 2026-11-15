@@ -94,7 +94,9 @@ public partial class MainWindow : Window
             SetError(InitError, "This rig has not been paired. Click 'Pair this rig' to register it with SRT.");
         }
 
-        _acPaths = AssettoCorsaPaths.Detect(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        var acDetection = AssettoCorsaPaths.DetectOnThisPc(_acFolders.Load());
+        _acPaths = acDetection.Paths;
+        ShowAcPicker(acDetection);
 
         // A session is still open (app closed or rig restarted mid-session): go straight to the session screen.
         var active = _activeSessionStore.Load();
@@ -110,11 +112,11 @@ public partial class MainWindow : Window
         }
 
         if (_acPaths is not null)
-            SetStatus(StatusAC, "✓ Found", "#3DDC84");
+            SetStatus(StatusAC, acDetection.UsedManualFolders ? "✓ Found (chosen manually)" : "✓ Found", "#3DDC84");
         else
         {
             SetStatus(StatusAC, "Not found", "#FF4D5E");
-            SetError(InitError, "Assetto Corsa installation was not detected. Install Assetto Corsa via Steam and ensure the game has been launched at least once.");
+            SetError(InitError, acDetection.Problem ?? "Assetto Corsa was not found. Contact SRT Labs.");
         }
 
         // The Steam account signed in right now must be the one registered for this rig.
@@ -141,6 +143,75 @@ public partial class MainWindow : Window
     }
 
     private void CheckAgain_Click(object sender, RoutedEventArgs e) => Recheck();
+
+    // ── Manual Assetto Corsa folders (when automatic detection fails) ─────────
+
+    private readonly AcFolderOverrideStore _acFolders = new();
+
+    private void ShowAcPicker(AssettoCorsaDetection detection)
+    {
+        var manual = _acFolders.Load();
+        var hasManual = manual.InstallDirectory is not null || manual.DocumentsDirectory is not null;
+        AcPickPanel.Visibility = detection.Paths is null || detection.UsedManualFolders ? Visibility.Visible : Visibility.Collapsed;
+        AcResetBtn.Visibility = hasManual ? Visibility.Visible : Visibility.Collapsed;
+        AcPickError.Visibility = Visibility.Collapsed;
+
+        var game = detection.Paths?.InstallDirectory ?? detection.GameFolderFound ?? manual.InstallDirectory;
+        SetStatus(AcGameFolderText, game is null ? "Not found yet" : $"✓ {game}", game is null ? "#8A919C" : "#3DDC84");
+        var settings = detection.Paths?.UserDocumentsDirectory ?? manual.DocumentsDirectory;
+        SetStatus(AcSettingsFolderText, settings is null ? "Not found yet" : $"✓ {settings}", settings is null ? "#8A919C" : "#3DDC84");
+    }
+
+    private void ChooseGameFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var picked = PickFolder("Choose the Assetto Corsa game folder (the one with AssettoCorsa.exe)", @"C:\Program Files (x86)\Steam\steamapps\common");
+        if (picked is null) return;
+        var folder = AssettoCorsaPaths.ResolveGameFolder(picked);
+        if (folder is null)
+        {
+            ShowAcPickError($"AssettoCorsa.exe isn't in {picked}. In Steam, right-click Assetto Corsa → Manage → Browse local files, and choose the folder that opens.");
+            return;
+        }
+        _acFolders.Save(_acFolders.Load() with { InstallDirectory = folder });
+        Recheck();
+    }
+
+    private void ChooseSettingsFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var picked = PickFolder("Choose the Assetto Corsa settings folder (Documents\\Assetto Corsa)",
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
+        if (picked is null) return;
+        var folder = AssettoCorsaPaths.ResolveSettingsFolder(picked);
+        if (folder is null)
+        {
+            ShowAcPickError($"cfg\\race.ini isn't in {picked}. Choose the \"Assetto Corsa\" folder inside Documents. If there is none, start AC once through Content Manager, close it, and try again.");
+            return;
+        }
+        _acFolders.Save(_acFolders.Load() with { DocumentsDirectory = folder });
+        Recheck();
+    }
+
+    private void ResetAcFolders_Click(object sender, RoutedEventArgs e)
+    {
+        _acFolders.Clear();
+        Recheck();
+    }
+
+    private string? PickFolder(string title, string startIn)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = title,
+            InitialDirectory = Directory.Exists(startIn) ? startIn : string.Empty
+        };
+        return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
+    }
+
+    private void ShowAcPickError(string message)
+    {
+        AcPickError.Text = message;
+        AcPickError.Visibility = Visibility.Visible;
+    }
 
     private void PairRig_Click(object sender, RoutedEventArgs e)
     {
@@ -875,7 +946,7 @@ public partial class MainWindow : Window
         (match.DiscordUsername is null ? string.Empty : $"  ·  Discord {match.DiscordUsername}");
 
     private AssettoCorsaPaths RequirePaths() =>
-        _acPaths ?? AssettoCorsaPaths.Detect(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile))
+        _acPaths ?? AssettoCorsaPaths.DetectOnThisPc(_acFolders.Load()).Paths
         ?? throw new InvalidOperationException("Assetto Corsa installation not found. Return to the initialisation screen.");
 
     private void ShowSearchStatus(string message)

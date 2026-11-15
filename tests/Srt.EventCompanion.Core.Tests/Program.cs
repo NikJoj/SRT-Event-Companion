@@ -8,6 +8,8 @@ var tests = new (string Name, Action Test)[]
     ("updates only profile name fields and makes a backup", UpdatesNamesAndMakesBackup),
     ("rejects unsafe driver names", RejectsUnsafeDriverNames),
     ("detects only complete Assetto Corsa installations", DetectsCompleteInstallation),
+    ("finds AC in other Steam libraries and says what is missing", FindsAcInSteamLibraries),
+    ("accepts manually chosen AC folders, forgiving near misses", AcceptsManualAcFolders),
     ("blocks sessions until Content Manager is verified", BlocksUnverifiedContentManager),
     ("prepares a session", PreparesSession),
     ("enforces the session state sequence", EnforcesSessionStateSequence),
@@ -90,6 +92,47 @@ static void RejectsUnsafeDriverNames()
 {
     using var fixture = new RaceIniFixture("[CAR_0]\n");
     AssertThrows(() => new RigProfileService().PreviewDriverNameChange(fixture.Path, "First\nLast"));
+}
+
+static void FindsAcInSteamLibraries()
+{
+    var vdf = "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"C:\\\\Program Files (x86)\\\\Steam\"\n\t}\n\t\"1\"\n\t{\n\t\t\"path\"\t\t\"D:\\\\SteamLibrary\"\n\t\t\"apps\"\n\t\t{\n\t\t\t\"244210\"\t\t\"12345\"\n\t\t}\n\t}\n}";
+    var libraries = AssettoCorsaPaths.ParseSteamLibraries(vdf);
+    AssertEqual("2", libraries.Count.ToString());
+    AssertEqual(@"D:\SteamLibrary", libraries[1]);
+
+    using var fixture = new AssettoCorsaFixture();
+    var docs = Path.Combine(fixture.UserProfileDirectory, "Documents", "Assetto Corsa");
+    var missingGame = AssettoCorsaPaths.Diagnose(new[] { docs }, new[] { Path.Combine(fixture.UserProfileDirectory, "nope") });
+    AssertTrue(missingGame.Paths is null && missingGame.Problem!.Contains("game folder"));
+    var missingSettings = AssettoCorsaPaths.Diagnose(new[] { Path.Combine(fixture.UserProfileDirectory, "OneDrive", "Assetto Corsa") }, new[] { fixture.InstallDirectory });
+    AssertTrue(missingSettings.Paths is null && missingSettings.Problem!.Contains("race.ini"));
+    var found = AssettoCorsaPaths.Diagnose(new[] { Path.Combine(fixture.UserProfileDirectory, "OneDrive", "Assetto Corsa"), docs }, new[] { "", fixture.InstallDirectory });
+    AssertEqual(docs, found.Paths!.UserDocumentsDirectory);
+}
+
+static void AcceptsManualAcFolders()
+{
+    using var fixture = new AssettoCorsaFixture();
+    var docs = Path.Combine(fixture.UserProfileDirectory, "Documents", "Assetto Corsa");
+    // Game folder: the exact folder, a folder inside it, or its parent all resolve; somewhere else doesn't.
+    AssertEqual(fixture.InstallDirectory, AssettoCorsaPaths.ResolveGameFolder(fixture.InstallDirectory));
+    Directory.CreateDirectory(Path.Combine(fixture.InstallDirectory, "content"));
+    AssertEqual(fixture.InstallDirectory, AssettoCorsaPaths.ResolveGameFolder(Path.Combine(fixture.InstallDirectory, "content")));
+    AssertTrue(AssettoCorsaPaths.ResolveGameFolder(fixture.UserProfileDirectory) is null);
+    // Settings folder: "Assetto Corsa", Documents itself, or the cfg folder all resolve.
+    AssertEqual(docs, AssettoCorsaPaths.ResolveSettingsFolder(docs));
+    AssertEqual(docs, AssettoCorsaPaths.ResolveSettingsFolder(Path.Combine(fixture.UserProfileDirectory, "Documents")));
+    AssertEqual(docs, AssettoCorsaPaths.ResolveSettingsFolder(Path.Combine(docs, "cfg")));
+    AssertTrue(AssettoCorsaPaths.ResolveSettingsFolder(fixture.InstallDirectory) is null);
+
+    // Chosen folders are remembered.
+    var store = new AcFolderOverrideStore(Path.Combine(fixture.UserProfileDirectory, "ac-folders.json"));
+    AssertTrue(store.Load().InstallDirectory is null);
+    store.Save(new AcFolderOverrides(fixture.InstallDirectory, docs));
+    AssertEqual(fixture.InstallDirectory, store.Load().InstallDirectory);
+    store.Clear();
+    AssertTrue(store.Load().DocumentsDirectory is null);
 }
 
 static void DetectsCompleteInstallation()

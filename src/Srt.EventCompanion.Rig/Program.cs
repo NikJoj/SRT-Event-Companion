@@ -9,10 +9,11 @@ if (args.Length == 0)
 
 if (string.Equals(args[0], "inspect", StringComparison.OrdinalIgnoreCase))
 {
-    var paths = AssettoCorsaPaths.Detect(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+    var detection = AssettoCorsaPaths.DetectOnThisPc();
+    var paths = detection.Paths;
     if (paths is null)
     {
-        Console.Error.WriteLine("Assetto Corsa installation or active race.ini profile was not found.");
+        Console.Error.WriteLine(detection.Problem);
         return 1;
     }
 

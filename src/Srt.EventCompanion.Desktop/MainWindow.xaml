@@ -57,7 +57,8 @@
 
       <!-- ── STEP 1: RIG CHECK ── -->
       <Grid x:Name="StepInit" Visibility="Visible">
-        <StackPanel Width="620" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Width="620" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,16">
           <TextBlock Text="RIG CHECK" Style="{StaticResource Kicker}"/>
           <TextBlock Text="INITIALISING RIG" Style="{StaticResource StepHeading}"/>
           <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,22"
@@ -87,12 +88,61 @@
 
           <TextBlock x:Name="InitError" Style="{StaticResource ErrorText}" Visibility="Collapsed"/>
 
+          <!-- Shown when Assetto Corsa can't be found automatically: staff pick the folders themselves. -->
+          <Grid x:Name="AcPickPanel" Visibility="Collapsed" Margin="0,4,0,14">
+            <Border Style="{StaticResource Card}" Padding="22,16">
+              <StackPanel>
+                <TextBlock Text="SET ASSETTO CORSA FOLDERS" Style="{StaticResource CardHeading}"/>
+                <TextBlock Style="{StaticResource Hint}" Margin="0,2,0,12" TextWrapping="Wrap"
+                           Text="Couldn't find them automatically? Choose them here. The app remembers them on this rig."/>
+
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Margin="0,0,12,0">
+                    <TextBlock Text="1 · GAME FOLDER (contains AssettoCorsa.exe)" Style="{StaticResource FieldLabel}"/>
+                    <TextBlock x:Name="AcGameFolderText" Text="Not set" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,2,0,4"/>
+                    <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap"
+                               Text="To find it: in Steam, right-click Assetto Corsa → Manage → Browse local files. Pick the folder that opens. It usually ends in steamapps\common\assettocorsa, for example D:\SteamLibrary\steamapps\common\assettocorsa."/>
+                  </StackPanel>
+                  <Button Grid.Column="1" Content="CHOOSE GAME FOLDER…" Style="{StaticResource SecondaryBtn}"
+                          VerticalAlignment="Top" Click="ChooseGameFolder_Click"/>
+                </Grid>
+
+                <Border Height="1" Background="{StaticResource Line}" Margin="0,14"/>
+
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Margin="0,0,12,0">
+                    <TextBlock Text="2 · SETTINGS FOLDER (contains cfg\race.ini)" Style="{StaticResource FieldLabel}"/>
+                    <TextBlock x:Name="AcSettingsFolderText" Text="Not set" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,2,0,4"/>
+                    <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap"
+                               Text="This is the Assetto Corsa folder inside Documents (it may be under OneDrive\Documents). If it doesn't exist, start AC once through Content Manager, close it, then select CHECK AGAIN."/>
+                  </StackPanel>
+                  <Button Grid.Column="1" Content="CHOOSE SETTINGS FOLDER…" Style="{StaticResource SecondaryBtn}"
+                          VerticalAlignment="Top" Click="ChooseSettingsFolder_Click"/>
+                </Grid>
+
+                <TextBlock x:Name="AcPickError" Style="{StaticResource ErrorText}" Visibility="Collapsed" Margin="0,12,0,0"/>
+                <Button x:Name="AcResetBtn" Content="FORGET CHOSEN FOLDERS" Style="{StaticResource SecondaryBtn}" HorizontalAlignment="Left"
+                        Margin="0,12,0,0" Visibility="Collapsed" Click="ResetAcFolders_Click"/>
+              </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardAccent}"/>
+          </Grid>
+
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,6,0,0">
             <Button Content="CHECK AGAIN" Style="{StaticResource SecondaryBtn}" Click="CheckAgain_Click" Margin="0,0,8,0"/>
             <Button Content="PAIR THIS RIG" Style="{StaticResource SecondaryBtn}" Click="PairRig_Click" Margin="0,0,8,0"/>
             <Button x:Name="ProceedBtn" Content="CONTINUE  →" Style="{StaticResource PrimaryBtn}" Click="Proceed_Click" IsEnabled="False"/>
           </StackPanel>
         </StackPanel>
+        </ScrollViewer>
       </Grid>
 
       <!-- ── STEP 2: DRIVER (left: pick / details · right: raced at this centre) ── -->
