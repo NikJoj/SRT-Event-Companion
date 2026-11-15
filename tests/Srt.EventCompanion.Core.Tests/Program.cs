@@ -38,6 +38,7 @@ var tests = new (string Name, Action Test)[]
     ("filters this centre's drivers by any part of a name", FiltersCentreDrivers),
     ("keeps at most five favourite drivers", KeepsFiveFavourites),
     ("reads the centre's recent drivers from SRT", ReadsRecentDrivers),
+    ("asks SRT whether the driver is racing on another rig", ReadsDriverBusy),
     ("only installs releases newer than the running version", ComparesVersions),
     ("installs only downloads that match the published SHA-256", VerifiesUpdateDownloads),
     ("heartbeat reports version, backlog, state and Steam", BuildsHeartbeat),
@@ -581,6 +582,22 @@ static void ReadsRecentDrivers()
     AssertEqual("https://www.simracingtharavadu.in/api/kerala-race-wars-drivers?rigId=TTL-01&recent=1", seen!.RequestUri!.AbsoluteUri);
     AssertEqual("SRT New Driver", drivers.Single().PreferredInGameName);
     AssertEqual("5", drivers.Single().SessionCount.ToString());
+}
+
+static void ReadsDriverBusy()
+{
+    HttpRequestMessage? seen = null;
+    var api = new RigApiClient(new RigCredential("https://www.simracingtharavadu.in", "TTL-01", "t", "76561198000000000"),
+        new HttpClient(new StubHandler(request =>
+        {
+            seen = request;
+            return Json(HttpStatusCode.OK, "{\"rig\":{\"id\":\"TTL-01\",\"displayName\":\"Rig 01\",\"centreId\":\"ttl\",\"centreName\":\"TTL\"},\"event\":null,\"app\":null," +
+                "\"driverBusy\":{\"rigId\":\"KOC-R02\",\"rigName\":\"Rig 02\",\"centreName\":\"Kochi\",\"startedAt\":\"2026-11-15T15:00:00Z\",\"message\":\"Nikhil is already in a session on Rig 02 at Kochi\"}}");
+        })));
+    var config = api.GetConfigAsync("@Nikhil").GetAwaiter().GetResult();
+    AssertEqual("https://www.simracingtharavadu.in/api/kerala-race-wars-config?rigId=TTL-01&driver=nikhil", seen!.RequestUri!.AbsoluteUri);
+    AssertEqual("Rig 02", config.DriverBusy!.RigName);
+    AssertTrue(config.DriverBusy.Message.Contains("already in a session"));
 }
 
 static void ComparesVersions()

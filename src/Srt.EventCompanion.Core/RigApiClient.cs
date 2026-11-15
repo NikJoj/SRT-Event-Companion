@@ -18,7 +18,10 @@ public sealed record EventServerConfig(string Id, string Name, string ServerHost
 }
 
 /// <summary>What a rig needs before every launch: who it is, and the live event's server.</summary>
-public sealed record RigConfig(RigInfo Rig, EventServerConfig? Event, AppRelease? App = null);
+/// <summary>Set when the driver asked about is already in a live session on another rig.</summary>
+public sealed record DriverBusy(string RigId, string RigName, string CentreName, DateTimeOffset StartedAt, string Message);
+
+public sealed record RigConfig(RigInfo Rig, EventServerConfig? Event, AppRelease? App = null, DriverBusy? DriverBusy = null);
 
 public sealed record DriverMatch(int ProfileId, string DisplayName, string? SrtUsername, string? DiscordUsername, string? SuggestedSrtUsername,
     string? LastDisplayName = null, DateTimeOffset? LastPlayedAt = null, int? SessionCount = null)
@@ -59,9 +62,11 @@ public sealed class RigApiClient
 
     public string RigId => _credential.RigId;
 
-    public async Task<RigConfig> GetConfigAsync(CancellationToken cancellationToken = default)
+    /// <param name="driverUsername">Optional SRT username: SRT then says (DriverBusy) if that driver is racing on another rig.</param>
+    public async Task<RigConfig> GetConfigAsync(string? driverUsername = null, CancellationToken cancellationToken = default)
     {
-        var json = await SendAsync(HttpMethod.Get, $"api/kerala-race-wars-config?rigId={Uri.EscapeDataString(_credential.RigId)}", null, cancellationToken);
+        var driver = driverUsername is null ? string.Empty : $"&driver={Uri.EscapeDataString(SrtUsername.Normalize(driverUsername))}";
+        var json = await SendAsync(HttpMethod.Get, $"api/kerala-race-wars-config?rigId={Uri.EscapeDataString(_credential.RigId)}{driver}", null, cancellationToken);
         return json.Deserialize<RigConfig>(Json) ?? throw new RigApiException("SRT returned an empty rig configuration.", HttpStatusCode.OK);
     }
 

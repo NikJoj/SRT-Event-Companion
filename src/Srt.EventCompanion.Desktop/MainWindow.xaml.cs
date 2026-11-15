@@ -496,8 +496,10 @@ public partial class MainWindow : Window
             }
 
             // Always fetch the live event just before launch, so admin changes apply immediately.
-            _config = await _api.GetConfigAsync();
+            _config = await _api.GetConfigAsync(username);
             _ = SendHeartbeatAsync(); // driver check-in
+            // A driver can only race on one rig at a time.
+            if (_config.DriverBusy is { } busy) throw new InvalidOperationException(busy.Message);
             if (_config.Event is null)
                 throw new InvalidOperationException("No Kerala Race Wars event is live. Ask an SRT admin to make an event live in the dashboard (Kerala Race Wars → Event & server).");
 
@@ -601,6 +603,14 @@ public partial class MainWindow : Window
             // Steam could have been switched since startup; laps are matched to drivers by this account.
             if (SteamAccount.Check(_credential.SteamId) is { IsOk: false } launchSteam)
                 throw new InvalidOperationException(launchSteam.Message);
+            // Check again at launch: the driver may have been started on another rig since the preview.
+            if (_api is not null)
+            {
+                RigConfig? latest = null;
+                try { latest = await _api.GetConfigAsync(_preparation.Request.Driver.SrtUsername); }
+                catch (Exception) { /* offline: SRT still refuses a second live session when the start reaches it */ }
+                if (latest?.DriverBusy is { } busyAtLaunch) throw new InvalidOperationException(busyAtLaunch.Message);
+            }
 
             var paths = RequirePaths();
             var displayName = _preparation.Request.Driver.DisplayName;
