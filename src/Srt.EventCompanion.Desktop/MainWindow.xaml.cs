@@ -63,7 +63,11 @@ public partial class MainWindow : Window
         Loaded += (_, _) => RunInitChecks();
         _syncTimer.Tick += async (_, _) => await SyncTickAsync();
         _lapTimer.Tick += (_, _) => LapTick();
-        VersionText.Text = $"V{AppVersion.Current}";
+        var built = System.Reflection.Assembly.GetExecutingAssembly()
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
+            .OfType<System.Reflection.AssemblyMetadataAttribute>()
+            .FirstOrDefault(a => a.Key == "BuildDate")?.Value;
+        VersionText.Text = built is null ? $"V{AppVersion.Current}" : $"V{AppVersion.Current}  ·  built {built}";
         Closed += (_, _) => StopLapRecording(flush: false);
     }
 

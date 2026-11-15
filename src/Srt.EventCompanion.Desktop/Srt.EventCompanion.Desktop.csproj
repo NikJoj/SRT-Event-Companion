@@ -26,4 +26,8 @@
     <Resource Include="Assets\app.ico" />
     <None Include="Assets\Fonts\OFL-*.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Shown in the footer so staff can tell which build a rig is running. -->
+    <AssemblyMetadata Include="BuildDate" Value="$([System.DateTime]::Now.ToString('d MMM HH:mm'))" />
+  </ItemGroup>
 </Project>
