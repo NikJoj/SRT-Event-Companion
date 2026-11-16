@@ -12,7 +12,8 @@ public sealed record ActiveRigSession(
     string ContentManagerBackupPath,
     DateTimeOffset StartedAt,
     string? EventId = null,
-    string? RigDefaultName = null);
+    string? RigDefaultName = null,
+    string? DriverToken = null);
 
 public sealed class ActiveSessionStore
 {

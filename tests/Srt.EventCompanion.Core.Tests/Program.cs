@@ -42,7 +42,11 @@ var tests = new (string Name, Action Test)[]
     ("only installs releases newer than the running version", ComparesVersions),
     ("installs only downloads that match the published SHA-256", VerifiesUpdateDownloads),
     ("heartbeat reports version, backlog, state and Steam", BuildsHeartbeat),
-    ("reads the published release from the rig config", ReadsPublishedRelease)
+    ("reads the published release from the rig config", ReadsPublishedRelease),
+    ("checks driver emails the way SRT does", ChecksDriverEmails),
+    ("signs a driver in with an emailed code", SignsDriverInWithEmailCode),
+    ("start-session carries the driver's email sign-in", StartSessionCarriesDriverToken),
+    ("an expired sign-in shows SRT's message, not a re-pair prompt", ExpiredSignInKeepsMessage)
 };
 
 var failures = 0;
@@ -646,6 +650,72 @@ static void ReadsPublishedRelease()
     var config = api.GetConfigAsync().GetAwaiter().GetResult();
     AssertEqual("1.2.0", config.App!.Version);
     AssertEqual("Fixes", config.App.Notes);
+}
+
+static void ChecksDriverEmails()
+{
+    AssertEqual("nikhil@example.com", EmailAddress.Normalize("  Nikhil@Example.COM "));
+    AssertTrue(EmailAddress.IsValid("nikhil@example.com"));
+    AssertTrue(EmailAddress.IsValid("a.b+krw@mail.co.in"));
+    foreach (var bad in new[] { "", "nikhil", "nikhil@", "@example.com", "nikhil@example", "a b@example.com", "a@b@example.com", "nikhil@example.c" })
+        AssertTrue(!EmailAddress.IsValid(bad));
+}
+
+static void SignsDriverInWithEmailCode()
+{
+    var bodies = new List<JsonNode>();
+    var api = new RigApiClient(new RigCredential("https://www.simracingtharavadu.in", "KOC-R01", "t", "76561198000000000"), new HttpClient(new StubHandler(request =>
+    {
+        AssertEqual("https://www.simracingtharavadu.in/api/kerala-race-wars-email", request.RequestUri!.AbsoluteUri);
+        var body = JsonNode.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!;
+        bodies.Add(body);
+        return (string?)body["action"] switch
+        {
+            "send-code" => Json(HttpStatusCode.OK, "{\"sent\":true,\"email\":\"ni••••@example.com\",\"expiresInSeconds\":600,\"resendInSeconds\":60,\"notice\":\"Only used to verify you.\"}"),
+            "verify-code" => Json(HttpStatusCode.OK, "{\"verified\":true,\"needsProfile\":true,\"driver\":null,\"driverToken\":\"tok\"}"),
+            _ => Json(HttpStatusCode.Created, "{\"driver\":{\"profileId\":100,\"displayName\":\"Nikhil Joji\",\"srtUsername\":\"nikhiljoji.100\"}}")
+        };
+    })));
+
+    var sent = api.SendEmailCodeAsync(" Nikhil@Example.com ").GetAwaiter().GetResult();
+    AssertEqual("ni••••@example.com", sent.Email);
+    AssertTrue(sent.ResendInSeconds == 60);
+    AssertEqual("nikhil@example.com", (string?)bodies[0]["email"]);
+    AssertEqual("KOC-R01", (string?)bodies[0]["rigId"]);
+
+    var verified = api.VerifyEmailCodeAsync("nikhil@example.com", "123 456").GetAwaiter().GetResult();
+    AssertTrue(verified.NeedsProfile && verified.Driver is null);
+    AssertEqual("tok", verified.DriverToken);
+    AssertEqual("123456", (string?)bodies[1]["code"]);
+
+    var driver = api.CreateEmailProfileAsync("tok", "  Nikhil Joji ").GetAwaiter().GetResult();
+    AssertEqual("nikhiljoji.100", driver.SrtUsername);
+    AssertEqual("Nikhil Joji", (string?)bodies[2]["displayName"]);
+
+    try { api.SendEmailCodeAsync("not-an-email").GetAwaiter().GetResult(); throw new InvalidOperationException("Expected rejection."); }
+    catch (ArgumentException) { }
+    try { api.VerifyEmailCodeAsync("nikhil@example.com", "12345").GetAwaiter().GetResult(); throw new InvalidOperationException("Expected rejection."); }
+    catch (ArgumentException) { }
+    AssertTrue(bodies.Count == 3);
+}
+
+static void StartSessionCarriesDriverToken()
+{
+    var session = new ActiveRigSession(Guid.NewGuid(), "@nikhiljoji.100", "Nikhil Joji", "r", "rb", "v", "vb", DateTimeOffset.UtcNow, "round-1", "Rig 01", "tok");
+    AssertEqual("tok", (string?)IngestMessages.StartSession("KOC-R01", session)["driverToken"]);
+    AssertTrue(IngestMessages.StartSession("KOC-R01", session with { DriverToken = null })["driverToken"] is null);
+}
+
+static void ExpiredSignInKeepsMessage()
+{
+    var credential = new RigCredential("https://www.simracingtharavadu.in", "KOC-R01", "t", "76561198000000000");
+    var expired = new RigApiClient(credential, new HttpClient(new StubHandler(_ => Json(HttpStatusCode.Unauthorized, "{\"error\":\"Driver sign-in expired. Verify the email again.\"}"))));
+    try { expired.CreateEmailProfileAsync("tok", "Nikhil").GetAwaiter().GetResult(); throw new InvalidOperationException("Expected refusal."); }
+    catch (RigApiException exception) { AssertEqual("Driver sign-in expired. Verify the email again.", exception.Message); }
+
+    var unpaired = new RigApiClient(credential, new HttpClient(new StubHandler(_ => Json(HttpStatusCode.Unauthorized, "{\"error\":\"Invalid rig credentials.\"}"))));
+    try { unpaired.GetConfigAsync().GetAwaiter().GetResult(); throw new InvalidOperationException("Expected refusal."); }
+    catch (RigApiException exception) { AssertEqual("This rig's SRT pairing is no longer valid. Pair the rig again.", exception.Message); }
 }
 
 static HttpResponseMessage Json(HttpStatusCode status, string body) =>

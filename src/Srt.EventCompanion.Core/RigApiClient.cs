@@ -32,6 +32,15 @@ public sealed record DriverMatch(int ProfileId, string DisplayName, string? SrtU
 
 public sealed record RecentDrivers(IReadOnlyList<DriverMatch> Drivers);
 
+/// <summary>SRT emailed a 6-digit code. Email is shown masked (ni••••@gmail.com).</summary>
+public sealed record EmailCodeSent(string Email, int ExpiresInSeconds, int ResendInSeconds, string Notice);
+
+/// <summary>
+/// The driver proved they own the email. DriverToken lets this rig start one session for them (SRT refuses a session
+/// without it). NeedsProfile: the email is new, so ask for the name to show on the leaderboard and call CreateEmailProfileAsync.
+/// </summary>
+public sealed record EmailVerification(bool NeedsProfile, DriverMatch? Driver, string DriverToken);
+
 public sealed record DriverLookup(string Query, IReadOnlyList<DriverMatch> Matches, bool UsernameAvailable);
 
 public sealed class RigApiException : Exception
@@ -99,6 +108,36 @@ public sealed class RigApiClient
             ["action"] = "create", ["srtUsername"] = SrtUsername.Normalize(srtUsername), ["displayName"] = displayName
         }, cancellationToken);
 
+    /// <summary>Step 1 of driver sign-in: SRT emails the driver a 6-digit code.</summary>
+    public async Task<EmailCodeSent> SendEmailCodeAsync(string email, CancellationToken cancellationToken = default)
+    {
+        var normalized = EmailAddress.Normalize(email);
+        if (!EmailAddress.IsValid(normalized)) throw new ArgumentException("Enter a valid email address.", nameof(email));
+        var json = await SendAsync(HttpMethod.Post, "api/kerala-race-wars-email",
+            new JsonObject { ["action"] = "send-code", ["rigId"] = _credential.RigId, ["email"] = normalized }, cancellationToken);
+        return json.Deserialize<EmailCodeSent>(Json) ?? throw new RigApiException("SRT did not confirm the code was sent.", HttpStatusCode.OK);
+    }
+
+    /// <summary>Step 2: check the code. Only a verified driver can be started on this rig.</summary>
+    public async Task<EmailVerification> VerifyEmailCodeAsync(string email, string code, CancellationToken cancellationToken = default)
+    {
+        var digits = new string((code ?? string.Empty).Where(char.IsAsciiDigit).ToArray());
+        if (digits.Length != 6) throw new ArgumentException("Enter the 6-digit code from the email.", nameof(code));
+        var json = await SendAsync(HttpMethod.Post, "api/kerala-race-wars-email",
+            new JsonObject { ["action"] = "verify-code", ["rigId"] = _credential.RigId, ["email"] = EmailAddress.Normalize(email), ["code"] = digits }, cancellationToken);
+        var verification = json.Deserialize<EmailVerification>(Json);
+        if (verification is null || string.IsNullOrEmpty(verification.DriverToken)) throw new RigApiException("SRT did not confirm the code.", HttpStatusCode.OK);
+        return verification;
+    }
+
+    /// <summary>Step 3 (new emails only): create the driver with the name shown on the leaderboard.</summary>
+    public async Task<DriverMatch> CreateEmailProfileAsync(string driverToken, string displayName, CancellationToken cancellationToken = default)
+    {
+        var json = await SendAsync(HttpMethod.Post, "api/kerala-race-wars-email",
+            new JsonObject { ["action"] = "create-profile", ["rigId"] = _credential.RigId, ["driverToken"] = driverToken, ["displayName"] = displayName.Trim() }, cancellationToken);
+        return json["driver"].Deserialize<DriverMatch>(Json) ?? throw new RigApiException("SRT did not return the driver.", HttpStatusCode.OK);
+    }
+
     /// <summary>Sends one start-session / record-attempt / end-session message. The backend treats repeats as success.</summary>
     public Task PostIngestAsync(JsonObject body, CancellationToken cancellationToken = default) =>
         SendAsync(HttpMethod.Post, "api/kerala-race-wars-ingest", body, cancellationToken);
@@ -136,7 +175,9 @@ public sealed class RigApiClient
                 HttpStatusCode.NotFound => "This SRT feature is not deployed yet. Ask an admin to deploy the latest backend.",
                 _ => $"SRT returned an error ({(int)response.StatusCode})."
             };
-            if (response.StatusCode == HttpStatusCode.Unauthorized) message = "This rig's SRT pairing is no longer valid. Pair the rig again.";
+            // Only a rejected rig key means re-pairing; other refusals (expired code, used sign-in) keep SRT's own message.
+            if (response.StatusCode == HttpStatusCode.Unauthorized && (json?["error"] is null || message == "Invalid rig credentials."))
+                message = "This rig's SRT pairing is no longer valid. Pair the rig again.";
             throw new RigApiException(message, response.StatusCode);
         }
     }
@@ -155,6 +196,22 @@ public static class SrtUsername
     public static string Display(string normalized) => "@" + normalized;
 }
 
+/// <summary>Driver sign-in emails: trimmed and lowercased, the same rule SRT uses.</summary>
+public static class EmailAddress
+{
+    public static string Normalize(string? value) => (value ?? string.Empty).Trim().ToLowerInvariant();
+
+    public static bool IsValid(string normalized)
+    {
+        if (normalized.Length is < 6 or > 254 || normalized.Any(char.IsWhiteSpace)) return false;
+        var at = normalized.IndexOf('@');
+        if (at < 1 || at != normalized.LastIndexOf('@')) return false;
+        var domain = normalized[(at + 1)..];
+        var dot = domain.LastIndexOf('.');
+        return dot > 0 && domain.Length - dot - 1 >= 2 && domain[(dot + 1)..].All(char.IsAsciiLetterLower);
+    }
+}
+
 /// <summary>Builds the ingest messages exactly as the backend contract expects them.</summary>
 public static class IngestMessages
 {
@@ -162,7 +219,9 @@ public static class IngestMessages
     {
         ["action"] = "start-session", ["rigId"] = rigId, ["sessionId"] = session.SessionId.ToString(),
         ["srtUsername"] = session.SrtUsername, ["displayName"] = session.DisplayName,
-        ["eventId"] = session.EventId, ["startedAt"] = session.StartedAt.ToUniversalTime().ToString("O")
+        ["eventId"] = session.EventId, ["startedAt"] = session.StartedAt.ToUniversalTime().ToString("O"),
+        // Proof the driver verified their email on this rig. SRT takes the driver from it, not from the name above.
+        ["driverToken"] = session.DriverToken
     };
 
     /// <summary>Once a minute: lets admins see the rig is online, its app version and any backlog waiting to sync.</summary>

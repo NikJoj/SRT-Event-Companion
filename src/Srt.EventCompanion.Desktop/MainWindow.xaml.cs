@@ -44,14 +44,12 @@ public partial class MainWindow : Window
     private OutboxSender? _outboxSender;
     private bool _flushing;
 
-    // Driver step
-    private enum DriverMode { None, Registered, Claim, Create }
-    private DriverMode _driverMode = DriverMode.None;
-    private DriverMatch? _selectedDriver;
-    private readonly FavouriteDriverStore _favourites = new();
-    private IReadOnlyList<DriverMatch> _centreDrivers = Array.Empty<DriverMatch>();
-    private bool _centreDriversLoaded;
-    private bool _showingSearchResults;
+    // Driver step: the driver signs in with their email and a 6-digit code. SRT refuses a session without that sign-in.
+    private string? _driverEmail;          // where the code was sent
+    private string? _driverToken;          // proof of sign-in, good for one session on this rig
+    private DriverMatch? _selectedDriver;  // the verified driver; null until their profile exists
+    private readonly DispatcherTimer _resendTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private DateTimeOffset _resendAvailableAt;
 
     // Fetched from SRT just before launch; never stored on disk because it contains the server password.
     private RigConfig? _config;
@@ -63,6 +61,7 @@ public partial class MainWindow : Window
         Loaded += (_, _) => RunInitChecks();
         _syncTimer.Tick += async (_, _) => await SyncTickAsync();
         _lapTimer.Tick += (_, _) => LapTick();
+        _resendTimer.Tick += (_, _) => UpdateResendButton();
         var built = System.Reflection.Assembly.GetExecutingAssembly()
             .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
             .OfType<System.Reflection.AssemblyMetadataAttribute>()
@@ -240,115 +239,33 @@ public partial class MainWindow : Window
         StepDriver.Visibility = Visibility.Visible;
         StepLaunch.Visibility = Visibility.Collapsed;
         DriverError.Visibility = Visibility.Collapsed;
-        RenderFavourites();
-        RenderDriverList();
-        _ = LoadCentreDriversAsync();
-        SearchInput.Focus();
-    }
-
-    // ── Favourites (max 5, stored on this PC) ────────────────────────────────
-
-    private void RenderFavourites()
-    {
-        FavouritesPanel.Children.Clear();
-        var favourites = _favourites.Load();
-        foreach (var favourite in favourites)
-        {
-            var chip = new Button
-            {
-                Style = (Style)FindResource("FavouriteChip"),
-                Content = $"★ {favourite.DisplayName}",
-                ToolTip = $"@{favourite.SrtUsername} · in-game name: {favourite.InGameName}",
-                Tag = favourite
-            };
-            chip.Click += (_, _) => SelectDriver(new DriverMatch(favourite.ProfileId, favourite.DisplayName, favourite.SrtUsername, null,
-                favourite.SrtUsername, favourite.InGameName));
-            FavouritesPanel.Children.Add(chip);
-        }
-        FavouritesHint.Visibility = favourites.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void ToggleFavourite_Click(object sender, RoutedEventArgs e)
-    {
-        if (_driverMode != DriverMode.Registered || _selectedDriver?.SrtUsername is not { } username) return;
-        if (_favourites.Contains(username))
-        {
-            _favourites.Remove(username);
-        }
-        else
-        {
-            var inGameName = string.IsNullOrWhiteSpace(DisplayNameInput.Text) ? _selectedDriver.PreferredInGameName : DisplayNameInput.Text.Trim();
-            var result = _favourites.Add(new FavouriteDriver(username, _selectedDriver.DisplayName, inGameName, _selectedDriver.ProfileId));
-            if (result == FavouriteResult.Full)
-                ShowSearchStatus($"You already have {FavouriteDriverStore.MaxFavourites} favourites. Select one of them and choose ★ Unfavourite first.");
-        }
-        RenderFavourites();
-        UpdateFavouriteButton();
-    }
-
-    private void UpdateFavouriteButton()
-    {
-        var username = _driverMode == DriverMode.Registered ? _selectedDriver?.SrtUsername : null;
-        FavouriteBtn.Visibility = username is null ? Visibility.Collapsed : Visibility.Visible;
-        if (username is not null) FavouriteBtn.Content = _favourites.Contains(username) ? "★ UNFAVOURITE" : "☆ FAVOURITE";
-    }
-
-    // ── Drivers who have raced at this centre ────────────────────────────────
-
-    private async Task LoadCentreDriversAsync()
-    {
-        if (_api is null) return;
-        if (!_centreDriversLoaded) DriverListLabel.Text = "Loading drivers who have raced at this centre…";
-        try
-        {
-            _centreDrivers = await _api.RecentDriversAsync();
-            _centreDriversLoaded = true;
-        }
-        catch (Exception ex)
-        {
-            if (!_centreDriversLoaded) DriverListLabel.Text = $"Couldn't load this centre's drivers ({ex.Message}). You can still use Search SRT.";
-            return;
-        }
-        if (!_showingSearchResults) RenderDriverList();
-    }
-
-    private void SearchInput_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        _showingSearchResults = false;
-        RenderDriverList();
-    }
-
-    private void RenderDriverList()
-    {
-        if (_showingSearchResults) return;
-        var filtered = DriverFilter.Filter(_centreDrivers, SearchInput.Text);
-        DriverMatchesList.Items.Clear();
-        foreach (var driver in filtered.Take(100))
-            DriverMatchesList.Items.Add(new ListBoxItem { Content = DriverFilter.Describe(driver), Tag = driver });
-        DriverMatchesList.Visibility = filtered.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-
-        var typed = SearchInput.Text.Trim();
-        DriverListLabel.Text = !_centreDriversLoaded ? DriverListLabel.Text
-            : _centreDrivers.Count == 0 ? "No one has raced at this centre yet. Use Search SRT for existing SRT drivers, or New driver."
-            : filtered.Count == 0 ? $"No driver from this centre matches “{typed}”. Type their exact Discord or SRT username and choose Search SRT, or New driver."
-            : typed.Length == 0 ? $"Drivers who have raced at this centre ({_centreDrivers.Count}), most recent first:"
-            : $"{filtered.Count} driver(s) from this centre match “{typed}”:";
+        if (_driverToken is not null) DisplayNameInput.Focus();
+        else if (CodePanel.Visibility == Visibility.Visible) CodeInput.Focus();
+        else EmailInput.Focus();
     }
 
     private void ResetDriverStep()
     {
-        _driverMode = DriverMode.None;
+        _driverEmail = null;
+        _driverToken = null;
         _selectedDriver = null;
         _config = null;
         _preparation = null;
-        _showingSearchResults = false;
-        SearchInput.Text = string.Empty;
-        SearchStatus.Visibility = Visibility.Collapsed;
-        DriverMatchesList.Items.Clear();
-        DriverMatchesList.Visibility = Visibility.Collapsed;
+        _resendTimer.Stop();
+        EmailPanel.Visibility = Visibility.Visible;
+        EmailInput.Text = string.Empty;
+        EmailInput.IsEnabled = true;
+        SendCodeBtn.Content = "SEND CODE";
+        SendCodeBtn.IsEnabled = true;
+        CodePanel.Visibility = Visibility.Collapsed;
+        CodeInput.Text = string.Empty;
+        CodeStatus.Text = string.Empty;
         DriverPanel.Visibility = Visibility.Collapsed;
-        SrtUsernameInput.Text = string.Empty;
+        NewProfilePanel.Visibility = Visibility.Collapsed;
+        LeaderboardNameInput.Text = string.Empty;
+        InGamePanel.Visibility = Visibility.Collapsed;
         DisplayNameInput.Text = string.Empty;
+        DriverStatus.Visibility = Visibility.Collapsed;
     }
 
     private void BackToInit_Click(object sender, RoutedEventArgs e)
@@ -358,142 +275,163 @@ public partial class MainWindow : Window
         StepLaunch.Visibility = Visibility.Collapsed;
     }
 
-    private void SearchInput_KeyDown(object sender, KeyEventArgs e)
+    // ── Email sign-in ────────────────────────────────────────────────────────
+
+    private void EmailInput_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter) return;
-        // One match in this centre's list: pick it. Otherwise look the exact username up across SRT.
-        if (!_showingSearchResults && DriverMatchesList.Items.Count == 1 && SearchInput.Text.Trim().Length > 0)
-            DriverMatchesList.SelectedIndex = 0;
-        else
-            SearchDriver_Click(sender, e);
+        if (e.Key == Key.Enter && EmailInput.IsEnabled) _ = SendCodeAsync();
     }
 
-    private async void SearchDriver_Click(object sender, RoutedEventArgs e)
+    private void CodeInput_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) VerifyCode_Click(sender, e);
+    }
+
+    /// <summary>Send code, or once a code is on its way, start again with a different email.</summary>
+    private void SendCodeBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (!EmailInput.IsEnabled)
+        {
+            ResetDriverStep();
+            EmailInput.Focus();
+            return;
+        }
+        _ = SendCodeAsync();
+    }
+
+    private void ResendCode_Click(object sender, RoutedEventArgs e) => _ = SendCodeAsync();
+
+    private async Task SendCodeAsync()
     {
         DriverError.Visibility = Visibility.Collapsed;
-        DriverMatchesList.Visibility = Visibility.Collapsed;
-        DriverMatchesList.Items.Clear();
-        DriverPanel.Visibility = Visibility.Collapsed;
-        _selectedDriver = null;
-        _driverMode = DriverMode.None;
-
+        DriverStatus.Visibility = Visibility.Collapsed;
         if (_api is null) { SetError(DriverError, "This rig is not paired with SRT."); return; }
-        if (SrtUsername.Normalize(SearchInput.Text).Length == 0) { SetError(DriverError, "Enter the driver's Discord or SRT username."); return; }
+        var email = _driverEmail ?? EmailAddress.Normalize(EmailInput.Text);
+        if (!EmailAddress.IsValid(email)) { SetError(DriverError, "Enter the driver's email address, for example name@gmail.com."); return; }
 
-        SearchBtn.IsEnabled = false;
-        ShowSearchStatus("Searching SRT…");
+        SendCodeBtn.IsEnabled = false;
+        ResendCodeBtn.IsEnabled = false;
         try
         {
-            var lookup = await _api.FindDriverAsync(SearchInput.Text);
-            if (lookup.Matches.Count == 0)
-            {
-                ShowSearchStatus($"No SRT driver has the username @{lookup.Query}." +
-                    (lookup.UsernameAvailable ? " If this is a new driver, choose New driver." : string.Empty));
-                return;
-            }
-
-            if (lookup.Matches.Count == 1)
-            {
-                SearchStatus.Visibility = Visibility.Collapsed;
-                SelectDriver(lookup.Matches[0]);
-                return;
-            }
-
-            ShowSearchStatus("More than one driver matches. Pick the right one:");
-            _showingSearchResults = true;
-            DriverListLabel.Text = "SRT search results:";
-            foreach (var match in lookup.Matches)
-                DriverMatchesList.Items.Add(new ListBoxItem { Content = DescribeMatch(match), Tag = match });
-            DriverMatchesList.Visibility = Visibility.Visible;
+            var sent = await _api.SendEmailCodeAsync(email);
+            _driverEmail = email;
+            EmailInput.Text = email;
+            EmailInput.IsEnabled = false;
+            SendCodeBtn.Content = "CHANGE EMAIL";
+            if (!string.IsNullOrWhiteSpace(sent.Notice)) EmailNotice.Text = sent.Notice;
+            CodePanel.Visibility = Visibility.Visible;
+            CodeInput.Text = string.Empty;
+            CodeStatus.Text = $"Code sent to {sent.Email}. It works for {Math.Max(1, sent.ExpiresInSeconds / 60)} minutes. Not there? Check spam or promotions.";
+            _resendAvailableAt = DateTimeOffset.Now.AddSeconds(Math.Max(0, sent.ResendInSeconds));
+            _resendTimer.Start();
+            CodeInput.Focus();
         }
         catch (Exception ex)
         {
-            SearchStatus.Visibility = Visibility.Collapsed;
             SetError(DriverError, ex.Message);
         }
         finally
         {
-            SearchBtn.IsEnabled = true;
+            SendCodeBtn.IsEnabled = true;
+            UpdateResendButton();
         }
     }
 
-    private void DriverMatch_Selected(object sender, SelectionChangedEventArgs e)
+    private void UpdateResendButton()
     {
-        if (DriverMatchesList.SelectedItem is ListBoxItem { Tag: DriverMatch match }) SelectDriver(match);
+        var wait = (int)Math.Ceiling((_resendAvailableAt - DateTimeOffset.Now).TotalSeconds);
+        if (wait > 0)
+        {
+            ResendCodeBtn.IsEnabled = false;
+            ResendCodeBtn.Content = $"RESEND ({wait}s)";
+            return;
+        }
+        _resendTimer.Stop();
+        ResendCodeBtn.Content = "RESEND";
+        ResendCodeBtn.IsEnabled = _driverEmail is not null && _driverToken is null;
     }
 
-    private void SelectDriver(DriverMatch match)
-    {
-        _selectedDriver = match;
-        DriverPanel.Visibility = Visibility.Visible;
-        DisplayNameInput.Text = match.PreferredInGameName;
-
-        if (match.SrtUsername is not null)
-        {
-            _driverMode = DriverMode.Registered;
-            DriverPanelTitle.Text = $"✓ {match.DisplayName}" + (match.DiscordUsername is null ? string.Empty : $"  ·  Discord: {match.DiscordUsername}");
-            SrtUsernameInput.Text = match.SrtUsername;
-            SrtUsernameInput.IsReadOnly = true;
-            SrtUsernameHint.Text = "This driver already has an SRT username.";
-        }
-        else
-        {
-            _driverMode = DriverMode.Claim;
-            DriverPanelTitle.Text = $"✓ {match.DisplayName}  ·  Discord: {match.DiscordUsername}";
-            SrtUsernameInput.Text = match.SuggestedSrtUsername ?? string.Empty;
-            SrtUsernameInput.IsReadOnly = false;
-            SrtUsernameHint.Text = "Existing SRT driver. Keep their Discord username as the SRT username, or change it. Their Discord account stays linked either way.";
-        }
-        DriverError.Visibility = Visibility.Collapsed;
-        UpdateFavouriteButton();
-    }
-
-    private void NewDriver_Click(object sender, RoutedEventArgs e)
+    private async void VerifyCode_Click(object sender, RoutedEventArgs e)
     {
         DriverError.Visibility = Visibility.Collapsed;
-        DriverMatchesList.Visibility = Visibility.Collapsed;
-        SearchStatus.Visibility = Visibility.Collapsed;
-        _selectedDriver = null;
-        _driverMode = DriverMode.Create;
-        FavouriteBtn.Visibility = Visibility.Collapsed;
-        DriverPanel.Visibility = Visibility.Visible;
-        DriverPanelTitle.Text = "New driver";
-        var typed = SrtUsername.Normalize(SearchInput.Text);
-        SrtUsernameInput.Text = SrtUsername.IsValid(typed) ? typed : string.Empty;
-        SrtUsernameInput.IsReadOnly = false;
-        SrtUsernameHint.Text = "Choose a permanent SRT username: 2–32 characters, lowercase letters, numbers, \"_\" or \".\". It cannot be a username another SRT driver already uses.";
-        DisplayNameInput.Text = string.Empty;
-        SrtUsernameInput.Focus();
+        if (_api is null || _driverEmail is null) { SetError(DriverError, "Send a code to the driver's email first."); return; }
+
+        VerifyCodeBtn.IsEnabled = false;
+        try
+        {
+            var result = await _api.VerifyEmailCodeAsync(_driverEmail, CodeInput.Text);
+            _driverToken = result.DriverToken;
+            _resendTimer.Stop();
+            EmailPanel.Visibility = Visibility.Collapsed;
+            CodePanel.Visibility = Visibility.Collapsed;
+            DriverPanel.Visibility = Visibility.Visible;
+            InGamePanel.Visibility = Visibility.Visible;
+            if (result.Driver is { } driver && !result.NeedsProfile)
+            {
+                ShowVerifiedDriver(driver);
+                DisplayNameInput.Focus();
+            }
+            else
+            {
+                _selectedDriver = null;
+                DriverPanelTitle.Text = "✓ Email verified  ·  new driver";
+                DriverPanelHint.Text = _driverEmail;
+                NewProfilePanel.Visibility = Visibility.Visible;
+                LeaderboardNameInput.Focus();
+            }
+        }
+        catch (Exception ex)
+        {
+            SetError(DriverError, ex.Message);
+        }
+        finally
+        {
+            VerifyCodeBtn.IsEnabled = true;
+        }
+    }
+
+    private void ShowVerifiedDriver(DriverMatch driver)
+    {
+        _selectedDriver = driver;
+        DriverPanelTitle.Text = $"✓ {driver.DisplayName}";
+        DriverPanelHint.Text = $"Email verified  ·  {_driverEmail}";
+        NewProfilePanel.Visibility = Visibility.Collapsed;
+        if (string.IsNullOrWhiteSpace(DisplayNameInput.Text)) DisplayNameInput.Text = driver.DisplayName;
+    }
+
+    /// <summary>New drivers: the in-game name follows the leaderboard name unless staff change it.</summary>
+    private void LeaderboardName_TextChanged(object sender, TextChangedEventArgs e) => DisplayNameInput.Text = LeaderboardNameInput.Text.Trim();
+
+    private void ChangeDriver_Click(object sender, RoutedEventArgs e)
+    {
+        ResetDriverStep();
+        DriverError.Visibility = Visibility.Collapsed;
+        EmailInput.Focus();
     }
 
     private async void PreviewJoin_Click(object sender, RoutedEventArgs e)
     {
         DriverError.Visibility = Visibility.Collapsed;
         if (_api is null) { SetError(DriverError, "This rig is not paired with SRT."); return; }
-        if (_driverMode == DriverMode.None) { SetError(DriverError, "Search for the driver, or choose New driver."); return; }
+        if (_driverToken is null) { SetError(DriverError, "Sign the driver in first: send a code to their email, then enter it."); return; }
+        if (_selectedDriver is null && LeaderboardNameInput.Text.Trim().Length < 2) { SetError(DriverError, "Enter the name to show on the leaderboard."); return; }
 
-        var username = SrtUsername.Normalize(SrtUsernameInput.Text);
         var displayName = DisplayNameInput.Text.Trim();
-        if (!SrtUsername.IsValid(username)) { SetError(DriverError, "SRT username must be 2–32 characters: lowercase letters, numbers, \"_\" or \".\"."); return; }
         if (displayName.Length == 0) { SetError(DriverError, "Enter the in-game display name."); return; }
         if (_credential is not null && SteamAccount.Check(_credential.SteamId) is { IsOk: false } previewSteam) { SetError(DriverError, previewSteam.Message); return; }
 
         PreviewBtn.IsEnabled = false;
         try
         {
-            // Save the SRT username first, so the session is linked to the driver's profile.
-            if (_driverMode == DriverMode.Claim && _selectedDriver is not null)
+            // A new email: create the driver first, so the session is linked to their profile.
+            if (_selectedDriver is null)
             {
-                _selectedDriver = await _api.ClaimDriverAsync(_selectedDriver.ProfileId, _selectedDriver.DiscordUsername ?? string.Empty, username);
-                SelectDriver(_selectedDriver);
+                ShowVerifiedDriver(await _api.CreateEmailProfileAsync(_driverToken, LeaderboardNameInput.Text.Trim()));
                 DisplayNameInput.Text = displayName;
             }
-            else if (_driverMode == DriverMode.Create)
-            {
-                _selectedDriver = await _api.CreateDriverAsync(username, displayName);
-                SelectDriver(_selectedDriver);
-                DisplayNameInput.Text = displayName;
-            }
+            var username = SrtUsername.Normalize(_selectedDriver!.SrtUsername);
+            if (!SrtUsername.IsValid(username))
+                throw new InvalidOperationException("This driver's SRT profile is missing its handle. Select Change driver and sign in again, or ask an SRT admin.");
 
             // Always fetch the live event just before launch, so admin changes apply immediately.
             _config = await _api.GetConfigAsync(username);
@@ -511,7 +449,7 @@ public partial class MainWindow : Window
                 $"Event:         {evt.Name}{Environment.NewLine}" +
                 (evt.Track is null && evt.Car is null ? string.Empty : $"Track / car:   {string.Join(" · ", new[] { evt.Track, evt.Car }.Where(v => v is not null))}{Environment.NewLine}") +
                 $"Server:        {evt.ServerHost}:{evt.HttpPort}{Environment.NewLine}" +
-                $"Username:      {_preparation.Request.Driver.SrtUsername}{Environment.NewLine}" +
+                $"Driver:        {_selectedDriver.DisplayName}  ·  {_driverEmail}{Environment.NewLine}" +
                 $"Display name:  {displayName}{Environment.NewLine}{Environment.NewLine}" +
                 $"AC name now:   {_preparation.ProfileChange.Current.OfflineDriverName ?? "—"}{Environment.NewLine}" +
                 $"AC name after: {_preparation.ProfileChange.Proposed.OfflineDriverName}{Environment.NewLine}" +
@@ -653,9 +591,9 @@ public partial class MainWindow : Window
                 _cmSettings.DefaultValuesPath, cmBackup,
                 now,
                 _config.Event.Id,
-                _config.Rig.DisplayName);
+                _config.Rig.DisplayName,
+                _driverToken);
             _activeSessionStore.Save(session);
-            _favourites.UpdateInGameName(SrtUsername.Normalize(session.SrtUsername), displayName);
 
             _outbox.Enqueue(IngestMessages.StartSession(_credential.RigId, session));
             new ContentManagerLauncher().Launch(_config.Event.ToJoinTarget());
@@ -663,7 +601,7 @@ public partial class MainWindow : Window
             ShowLaunchStep(
                 $"✓ Content Manager launched.{Environment.NewLine}" +
                 $"Event:  {_config.Event.Name}{Environment.NewLine}" +
-                $"Driver: {displayName} ({session.SrtUsername}){Environment.NewLine}{Environment.NewLine}" +
+                $"Driver: {displayName} ({_driverEmail}){Environment.NewLine}{Environment.NewLine}" +
                 $"AC + CM names updated. Backups saved.{Environment.NewLine}" +
                 $"AC backup:  {raceBackup}{Environment.NewLine}" +
                 $"CM backup:  {cmBackup}{Environment.NewLine}{Environment.NewLine}" +
@@ -724,7 +662,6 @@ public partial class MainWindow : Window
             _activeSessionStore.Clear();
 
             ResetDriverStep();
-            _centreDriversLoaded = _centreDrivers.Count > 0; // refreshed by ShowDriverStep below
             PasswordPanel.Visibility = Visibility.Collapsed;
             LapPanel.Visibility = Visibility.Collapsed;
             ShowDriverStep();
@@ -733,7 +670,7 @@ public partial class MainWindow : Window
             summary += flush is { Remaining: > 0 }
                 ? $" {flush.Remaining} item(s) are waiting for internet and will sync automatically."
                 : " All session data is synced with SRT.";
-            ShowSearchStatus(summary);
+            ShowDriverStatus(summary);
             _ = SendHeartbeatAsync();
             // Between drivers is the best moment to update; the next driver hasn't been set up yet.
             _ = CheckForUpdateAsync(autoInstall: true);
@@ -862,7 +799,7 @@ public partial class MainWindow : Window
     /// <summary>Never during a session or while staff are setting up a driver.</summary>
     private bool CanUpdateNow() =>
         _activeSessionStore.Load() is null && StepLaunch.Visibility != Visibility.Visible &&
-        (StepInit.Visibility == Visibility.Visible || (_driverMode == DriverMode.None && SearchInput.Text.Length == 0));
+        (StepInit.Visibility == Visibility.Visible || (_driverEmail is null && EmailInput.Text.Length == 0));
 
     private async void InstallUpdate_Click(object sender, RoutedEventArgs e)
     {
@@ -954,19 +891,14 @@ public partial class MainWindow : Window
         return new SessionPreparationService(_rigProfileService).Prepare(rigConfiguration, request, RequirePaths().RaceIniPath);
     }
 
-    private static string DescribeMatch(DriverMatch match) =>
-        match.DisplayName +
-        (match.SrtUsername is null ? string.Empty : $"  ·  SRT @{match.SrtUsername}") +
-        (match.DiscordUsername is null ? string.Empty : $"  ·  Discord {match.DiscordUsername}");
-
     private AssettoCorsaPaths RequirePaths() =>
         _acPaths ?? AssettoCorsaPaths.DetectOnThisPc(_acFolders.Load()).Paths
         ?? throw new InvalidOperationException("Assetto Corsa installation not found. Return to the initialisation screen.");
 
-    private void ShowSearchStatus(string message)
+    private void ShowDriverStatus(string message)
     {
-        SearchStatus.Text = message;
-        SearchStatus.Visibility = Visibility.Visible;
+        DriverStatus.Text = message;
+        DriverStatus.Visibility = Visibility.Visible;
     }
 
     private static void SetStatus(TextBlock block, string text, string hexColor)
