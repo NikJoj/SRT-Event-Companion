@@ -5,14 +5,26 @@ using System.Text.Json.Nodes;
 
 namespace Srt.EventCompanion.Core;
 
-public sealed record RigInfo(string Id, string DisplayName, string CentreId, string CentreName);
+/// <summary>The driver who owns an individual's PC; they drive every session on it.</summary>
+public sealed record RigOwner(int ProfileId, string DisplayName, string? SrtUsername, string? DiscordUsername = null);
 
-public sealed record EventServerConfig(string Id, string Name, string ServerHost, int HttpPort, string? ServerPassword, string? Track, string? Car)
+/// <param name="Mode">"individual" for a driver's own PC; null or "centre" for a sim centre rig.</param>
+public sealed record RigInfo(string Id, string DisplayName, string CentreId, string CentreName, string? Mode = null, RigOwner? Owner = null)
 {
+    public bool IsIndividual => string.Equals(Mode, "individual", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <param name="Audience">Who the event is open to: "centre", "individual" or "all". SRT only sends events open to this PC.</param>
+public sealed record EventServerConfig(string Id, string Name, string ServerHost, int HttpPort, string? ServerPassword, string? Track, string? Car,
+    IReadOnlyList<ContentPackage>? Packages = null, string? Audience = null)
+{
+    /// <summary>Mods this event requires (empty when none, or when SRT is older than this app).</summary>
+    public IReadOnlyList<ContentPackage> RequiredContent => Packages ?? Array.Empty<ContentPackage>();
+
 
     public OnlineJoinTarget ToJoinTarget()
     {
-        if (!IPAddress.TryParse(ServerHost, out var address)) throw new InvalidOperationException($"The live event's server IP '{ServerHost}' is not valid. Ask an SRT admin to fix it.");
+        if (!IPAddress.TryParse(ServerHost, out var address)) throw new InvalidOperationException($"{Name}'s server IP '{ServerHost}' is not valid. Ask an SRT admin to fix it.");
         return new OnlineJoinTarget(address, HttpPort);
     }
 }
@@ -21,7 +33,18 @@ public sealed record EventServerConfig(string Id, string Name, string ServerHost
 /// <summary>Set when the driver asked about is already in a live session on another rig.</summary>
 public sealed record DriverBusy(string RigId, string RigName, string CentreName, DateTimeOffset StartedAt, string Message);
 
-public sealed record RigConfig(RigInfo Rig, EventServerConfig? Event, AppRelease? App = null, DriverBusy? DriverBusy = null);
+/// <param name="Event">The newest live event (what 1.0.x apps used).</param>
+/// <param name="Events">Every live event, newest first. Missing when SRT is older than this app.</param>
+public sealed record RigConfig(RigInfo Rig, EventServerConfig? Event, AppRelease? App = null, DriverBusy? DriverBusy = null,
+    IReadOnlyList<EventServerConfig>? Events = null)
+{
+    /// <summary>Every event a driver can pick right now.</summary>
+    public IReadOnlyList<EventServerConfig> LiveEvents => Events ?? (Event is null ? Array.Empty<EventServerConfig>() : new[] { Event });
+
+    /// <summary>The live event with this ID, or null if it is no longer live.</summary>
+    public EventServerConfig? FindEvent(string? eventId) =>
+        eventId is null ? null : LiveEvents.FirstOrDefault(e => string.Equals(e.Id, eventId, StringComparison.OrdinalIgnoreCase));
+}
 
 public sealed record DriverMatch(int ProfileId, string DisplayName, string? SrtUsername, string? DiscordUsername, string? SuggestedSrtUsername,
     string? LastDisplayName = null, DateTimeOffset? LastPlayedAt = null, int? SessionCount = null)
@@ -31,6 +54,22 @@ public sealed record DriverMatch(int ProfileId, string DisplayName, string? SrtU
 }
 
 public sealed record RecentDrivers(IReadOnlyList<DriverMatch> Drivers);
+
+/// <summary>A Discord sign-in waiting on the driver: show Url as a QR code (and Code as text).</summary>
+public sealed record DiscordLinkStart(string Code, string Url, string PollToken, int ExpiresInSeconds, string? InviteUrl);
+
+/// <summary>
+/// Where a Discord sign-in stands. Status: pending, done, error or expired. Outcome (when done): linked, pending-review
+/// (an admin must confirm an older SRT profile) or signed-in. Sign-in gives DriverToken (rig) or RigId/RigToken (own PC).
+/// InGuild: whether they are in the SRT Discord server (null when SRT couldn't tell).
+/// </summary>
+public sealed record DiscordLinkPoll(string Status, string? Error = null, string? Outcome = null, string? DiscordUsername = null,
+    bool? InGuild = null, string? InviteUrl = null, bool? Merged = null, bool? PendingReview = null, DriverMatch? Driver = null,
+    string? DriverToken = null, string? RigId = null, string? RigToken = null, string? SteamId = null, bool? MovedFromAnotherPc = null)
+{
+    public bool IsDone => Status == "done";
+    public bool IsFinished => Status is "done" or "error" or "expired";
+}
 
 /// <summary>SRT emailed a 6-digit code. Email is shown masked (ni••••@gmail.com).</summary>
 public sealed record EmailCodeSent(string Email, int ExpiresInSeconds, int ResendInSeconds, string Notice);
@@ -54,7 +93,7 @@ public sealed class RigApiException : Exception
     public bool IsPermanent => StatusCode is { } code && (int)code is >= 400 and < 500 && code is not (HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests);
 }
 
-/// <summary>Authenticated calls from a paired rig to the SRT Kerala Race Wars API.</summary>
+/// <summary>Authenticated calls from a paired rig (or an individual's PC) to the SRT event API.</summary>
 public sealed class RigApiClient
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -77,6 +116,14 @@ public sealed class RigApiClient
         var driver = driverUsername is null ? string.Empty : $"&driver={Uri.EscapeDataString(SrtUsername.Normalize(driverUsername))}";
         var json = await SendAsync(HttpMethod.Get, $"api/kerala-race-wars-config?rigId={Uri.EscapeDataString(_credential.RigId)}{driver}", null, cancellationToken);
         return json.Deserialize<RigConfig>(Json) ?? throw new RigApiException("SRT returned an empty rig configuration.", HttpStatusCode.OK);
+    }
+
+    /// <summary>A fresh one-hour download link for one package of a live event's required content.</summary>
+    public async Task<PackageDownload> GetPackageDownloadAsync(string packageId, CancellationToken cancellationToken = default)
+    {
+        var json = await SendAsync(HttpMethod.Get,
+            $"api/kerala-race-wars-content?rigId={Uri.EscapeDataString(_credential.RigId)}&packageId={Uri.EscapeDataString(packageId)}", null, cancellationToken);
+        return json.Deserialize<PackageDownload>(Json) ?? throw new RigApiException("SRT returned an empty download link.", HttpStatusCode.OK);
     }
 
     public async Task<DriverLookup> FindDriverAsync(string usernameQuery, CancellationToken cancellationToken = default)
@@ -136,6 +183,24 @@ public sealed class RigApiClient
         var json = await SendAsync(HttpMethod.Post, "api/kerala-race-wars-email",
             new JsonObject { ["action"] = "create-profile", ["rigId"] = _credential.RigId, ["driverToken"] = driverToken, ["displayName"] = displayName.Trim() }, cancellationToken);
         return json["driver"].Deserialize<DriverMatch>(Json) ?? throw new RigApiException("SRT did not return the driver.", HttpStatusCode.OK);
+    }
+
+    /// <summary>
+    /// Starts a Discord sign-in shown as a QR code. "link": link Discord to the signed-in driver (pass their sign-in token;
+    /// on an individual's PC the owner is used). "sign-in": sign a driver in at a sim centre rig with a linked Discord.
+    /// </summary>
+    public async Task<DiscordLinkStart> StartDiscordAsync(string purpose, string? driverToken = null, CancellationToken cancellationToken = default)
+    {
+        var body = new JsonObject { ["action"] = "start", ["purpose"] = purpose, ["rigId"] = _credential.RigId };
+        if (driverToken is not null) body["driverToken"] = driverToken;
+        var json = await SendAsync(HttpMethod.Post, "api/kerala-race-wars-discord", body, cancellationToken);
+        return json.Deserialize<DiscordLinkStart>(Json) ?? throw new RigApiException("SRT did not start the Discord sign-in.", HttpStatusCode.OK);
+    }
+
+    public async Task<DiscordLinkPoll> PollDiscordAsync(string pollToken, CancellationToken cancellationToken = default)
+    {
+        var json = await SendAsync(HttpMethod.Post, "api/kerala-race-wars-discord", new JsonObject { ["action"] = "poll", ["pollToken"] = pollToken }, cancellationToken);
+        return json.Deserialize<DiscordLinkPoll>(Json) ?? new DiscordLinkPoll("pending");
     }
 
     /// <summary>Sends one start-session / record-attempt / end-session message. The backend treats repeats as success.</summary>
@@ -225,11 +290,17 @@ public static class IngestMessages
     };
 
     /// <summary>Once a minute: lets admins see the rig is online, its app version and any backlog waiting to sync.</summary>
-    public static JsonObject Heartbeat(string rigId, string appVersion, int pendingSync, bool inSession, bool steamOk) => new()
+    /// <param name="contentMissing">How many of the live event's required packages are not installed or skipped (null = unknown).</param>
+    public static JsonObject Heartbeat(string rigId, string appVersion, int pendingSync, bool inSession, bool steamOk, int? contentMissing = null)
     {
-        ["action"] = "heartbeat", ["rigId"] = rigId, ["appVersion"] = appVersion, ["pendingSync"] = pendingSync,
-        ["state"] = inSession ? "session" : "idle", ["steamOk"] = steamOk
-    };
+        var message = new JsonObject
+        {
+            ["action"] = "heartbeat", ["rigId"] = rigId, ["appVersion"] = appVersion, ["pendingSync"] = pendingSync,
+            ["state"] = inSession ? "session" : "idle", ["steamOk"] = steamOk
+        };
+        if (contentMissing is { } missing) message["contentMissing"] = missing;
+        return message;
+    }
 
     public static JsonObject EndSession(string rigId, Guid sessionId, DateTimeOffset endedAt, bool completed = true) => new()
     {

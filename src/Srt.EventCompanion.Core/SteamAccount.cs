@@ -13,19 +13,19 @@ public sealed record SteamCheck(SteamCheckStatus Status, string RegisteredSteamI
     /// <summary>Short status for the checklist row.</summary>
     public string Label => Status switch
     {
-        SteamCheckStatus.Matches => $"✓ Matches rig (…{Tail(RegisteredSteamId)})",
+        SteamCheckStatus.Matches => $"✓ Matches (…{Tail(RegisteredSteamId)})",
         SteamCheckStatus.NotSignedIn => "Steam not signed in",
         _ => "Wrong Steam account"
     };
 
-    /// <summary>What went wrong and what to do, for the person at the rig.</summary>
+    /// <summary>What went wrong and what to do, for the person at the PC.</summary>
     public string Message => Status switch
     {
         SteamCheckStatus.Matches => string.Empty,
         SteamCheckStatus.NotSignedIn =>
-            $"Steam is not running or not signed in. Open Steam and sign in to the account registered for this rig (SteamID64 {RegisteredSteamId}).",
+            $"Steam is not running or not signed in. Open Steam and sign in to the account registered for this PC (SteamID64 {RegisteredSteamId}).",
         _ =>
-            $"Steam is signed in to a different account ({SignedInSteamId}). This rig is registered for SteamID64 {RegisteredSteamId}. " +
+            $"Steam is signed in to a different account ({SignedInSteamId}). This PC is registered for SteamID64 {RegisteredSteamId}. " +
             "Sign out of Steam and sign in to the registered account. If the registered account is wrong, contact the SRT Labs team."
     };
 

@@ -73,7 +73,7 @@ public sealed class RigPairingService
     {
         var code = NormalizeCode(pairingCode);
         if (code.Length == 0)
-            throw new PairingException("No pairing code entered.", "Type the code shown in SRT admin (Kerala Race Wars → Rigs → Pair).", contactSupport: false);
+            throw new PairingException("No pairing code entered.", "Type the code shown in SRT admin (Rigs → Pair).", contactSupport: false);
         if (signedInSteamId is null)
             throw new PairingException("Steam is not signed in on this PC.", "Open Steam and sign in to the account registered for this rig, then select Try again. The code still works.", contactSupport: false);
 

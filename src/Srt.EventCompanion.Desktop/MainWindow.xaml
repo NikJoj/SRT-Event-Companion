@@ -30,14 +30,17 @@
         <Border Grid.Column="1" Width="1" Height="32" Background="{StaticResource LineStrong}" Margin="20,0"/>
         <StackPanel Grid.Column="2" VerticalAlignment="Center">
           <TextBlock Text="SRT EVENT COMPANION" FontFamily="{StaticResource DisplayFont}" FontSize="28" Foreground="{StaticResource Text}"/>
-          <TextBlock Text="KERALA RACE WARS" Style="{StaticResource Kicker}" FontSize="12" Margin="0,-4,0,0"/>
+          <TextBlock x:Name="HeaderKicker" Text="SIM RACING THARAVADU" Style="{StaticResource Kicker}" FontSize="12" Margin="0,-4,0,0"/>
         </StackPanel>
         <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
           <Button x:Name="UpdateBtn" Visibility="Collapsed" Style="{StaticResource PrimaryBtn}" FontSize="14" Padding="18,8"
                   Margin="0,0,22,0" VerticalAlignment="Center" Click="InstallUpdate_Click"
                   ToolTip="A newer version was published by SRT. Installing takes about a minute and reopens the app."/>
+          <Button x:Name="SettingsBtn" Content="⚙  SETTINGS" Style="{StaticResource SecondaryBtn}" FontSize="13" Padding="14,6"
+                  Margin="0,0,22,0" VerticalAlignment="Center" Click="Settings_Click"
+                  ToolTip="Sim centre or own PC, start with Windows, automatic updates"/>
           <StackPanel VerticalAlignment="Center">
-            <TextBlock Text="RIG" Style="{StaticResource FieldLabel}" HorizontalAlignment="Right" Margin="0"/>
+            <TextBlock x:Name="RigLabelCaption" Text="RIG" Style="{StaticResource FieldLabel}" HorizontalAlignment="Right" Margin="0"/>
             <TextBlock x:Name="RigLabel" Text="Not paired" HorizontalAlignment="Right"
                        FontFamily="{StaticResource DisplayFont}" FontSize="24" Foreground="{StaticResource Text}"/>
           </StackPanel>
@@ -59,16 +62,36 @@
       <Grid x:Name="StepInit" Visibility="Visible">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Width="620" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,16">
-          <TextBlock Text="RIG CHECK" Style="{StaticResource Kicker}"/>
-          <TextBlock Text="INITIALISING RIG" Style="{StaticResource StepHeading}"/>
-          <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,22"
-                     Text="Checking this rig's SRT registration, Assetto Corsa and the signed-in Steam account."/>
+          <TextBlock Text="GET READY" Style="{StaticResource Kicker}"/>
+          <TextBlock Text="CHOOSE YOUR EVENT" Style="{StaticResource StepHeading}"/>
+          <TextBlock x:Name="InitHint" Style="{StaticResource Hint}" Margin="0,0,0,18"
+                     Text="Pick the event to race in. The app uses that event's server and installs the mods it needs."/>
+
+          <!-- Every live event; each has its own server and required mods. -->
+          <Grid Margin="0,0,0,18">
+            <Border Style="{StaticResource Card}" Padding="0,10,0,6">
+              <StackPanel>
+                <Grid Margin="22,0,14,6">
+                  <TextBlock Text="LIVE EVENTS" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0"/>
+                  <Button x:Name="RefreshEventsBtn" Content="REFRESH" Style="{StaticResource SecondaryBtn}" FontSize="12" Padding="12,4"
+                          HorizontalAlignment="Right" Click="RefreshEvents_Click"/>
+                </Grid>
+                <ListBox x:Name="EventList" Background="Transparent" BorderThickness="0" MaxHeight="230"
+                         ItemContainerStyle="{StaticResource DarkListItem}" SelectionChanged="EventList_SelectionChanged"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+                <TextBlock x:Name="EventStatus" Style="{StaticResource Hint}" Margin="22,6,22,6" Text="Loading live events…"/>
+              </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardAccent}"/>
+          </Grid>
+
+          <TextBlock Text="PC CHECK" Style="{StaticResource FieldLabel}"/>
 
           <Grid Margin="0,0,0,18">
             <Border Style="{StaticResource Card}" Padding="22,10">
               <StackPanel>
                 <Grid Height="46">
-                  <TextBlock Text="Rig registration" Style="{StaticResource StatusLabel}"/>
+                  <TextBlock x:Name="StatusRigLabel" Text="Rig registration" Style="{StaticResource StatusLabel}"/>
                   <TextBlock x:Name="StatusRig" Text="Checking…" Style="{StaticResource StatusValue}"/>
                 </Grid>
                 <Border Height="1" Background="{StaticResource Line}"/>
@@ -94,7 +117,7 @@
               <StackPanel>
                 <TextBlock Text="SET ASSETTO CORSA FOLDERS" Style="{StaticResource CardHeading}"/>
                 <TextBlock Style="{StaticResource Hint}" Margin="0,2,0,12" TextWrapping="Wrap"
-                           Text="Couldn't find them automatically? Choose them here. The app remembers them on this rig."/>
+                           Text="Couldn't find them automatically? Choose them here. The app remembers them on this PC."/>
 
                 <Grid>
                   <Grid.ColumnDefinitions>
@@ -138,7 +161,9 @@
 
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,6,0,0">
             <Button Content="CHECK AGAIN" Style="{StaticResource SecondaryBtn}" Click="CheckAgain_Click" Margin="0,0,8,0"/>
-            <Button Content="PAIR THIS RIG" Style="{StaticResource SecondaryBtn}" Click="PairRig_Click" Margin="0,0,8,0"/>
+            <Button x:Name="PairBtn" Content="PAIR THIS RIG" Style="{StaticResource SecondaryBtn}" Click="PairRig_Click" Margin="0,0,8,0"/>
+            <Button x:Name="PrepareBtn" Content="PREPARE FOR EVENT" Style="{StaticResource SecondaryBtn}" Click="PrepareForEvent_Click" Margin="0,0,8,0"
+                    ToolTip="Install the chosen event's mods now, before the session." IsEnabled="False"/>
             <Button x:Name="ProceedBtn" Content="CONTINUE  →" Style="{StaticResource PrimaryBtn}" Click="Proceed_Click" IsEnabled="False"/>
           </StackPanel>
         </StackPanel>
@@ -161,8 +186,8 @@
           <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,10,0">
             <StackPanel>
               <TextBlock Text="DRIVER" Style="{StaticResource Kicker}"/>
-              <TextBlock Text="WHO'S DRIVING?" Style="{StaticResource StepHeading}"/>
-              <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,20"
+              <TextBlock x:Name="DriverHeading" Text="WHO'S DRIVING?" Style="{StaticResource StepHeading}"/>
+              <TextBlock x:Name="DriverHint" Style="{StaticResource Hint}" Margin="0,0,0,20"
                          Text="The driver signs in with their email. SRT emails them a 6-digit code, and only a driver who enters the right code can race."/>
               <TextBlock x:Name="DriverStatus" Style="{StaticResource Hint}" Visibility="Collapsed" Margin="0,0,0,14"/>
 
@@ -178,6 +203,16 @@
                 </Grid>
                 <TextBlock x:Name="EmailNotice" Style="{StaticResource Hint}" Margin="0,0,0,14"
                            Text="Your email is only used to verify your identity. We will not use it for anything else."/>
+                <Grid Margin="0,0,0,16">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Style="{StaticResource Hint}" VerticalAlignment="Center"
+                             Text="Already linked Discord to SRT? Sign in with it instead: the driver scans a QR code with their phone."/>
+                  <Button x:Name="DiscordSignInBtn" Grid.Column="1" Content="SIGN IN WITH DISCORD" Style="{StaticResource SecondaryBtn}"
+                          Margin="12,0,0,0" Click="DiscordSignIn_Click"/>
+                </Grid>
               </StackPanel>
 
               <StackPanel x:Name="CodePanel" Visibility="Collapsed">
@@ -205,13 +240,23 @@
                       </Grid.ColumnDefinitions>
                       <TextBlock x:Name="DriverPanelTitle" FontFamily="{StaticResource DisplayFont}" FontSize="24"
                                  Foreground="{StaticResource Text}" VerticalAlignment="Center" TextWrapping="Wrap"/>
-                      <Button Grid.Column="1" Content="CHANGE DRIVER" Style="{StaticResource SecondaryBtn}" Margin="10,0,0,0" Click="ChangeDriver_Click"/>
+                      <Button x:Name="ChangeDriverBtn" Grid.Column="1" Content="CHANGE DRIVER" Style="{StaticResource SecondaryBtn}" Margin="10,0,0,0" Click="ChangeDriver_Click"/>
                     </Grid>
                     <TextBlock x:Name="DriverPanelHint" Style="{StaticResource Hint}"/>
+                    <!-- Discord: shown once linked, otherwise an optional Link button -->
+                    <Grid x:Name="DiscordRow" Margin="0,10,0,0" Visibility="Collapsed">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock x:Name="DiscordStatus" Style="{StaticResource Hint}" VerticalAlignment="Center"/>
+                      <Button x:Name="LinkDiscordBtn" Grid.Column="1" Content="LINK DISCORD" Style="{StaticResource SecondaryBtn}"
+                              Margin="10,0,0,0" Click="LinkDiscord_Click" ToolTip="Optional. Lets the driver sign in with Discord next time, and joins their SRT race history."/>
+                    </Grid>
                     <StackPanel x:Name="NewProfilePanel" Visibility="Collapsed" Margin="0,14,0,0">
                       <TextBlock Text="NAME ON THE LEADERBOARD" Style="{StaticResource FieldLabel}"/>
                       <TextBox x:Name="LeaderboardNameInput" Style="{StaticResource Field}" MaxLength="64" TextChanged="LeaderboardName_TextChanged"/>
-                      <TextBlock Style="{StaticResource Hint}" Text="First time with this email. Ask the driver for the name to show on the Kerala Race Wars leaderboard."/>
+                      <TextBlock Style="{StaticResource Hint}" Text="First time with this email. Ask the driver for the name to show on the SRT leaderboard."/>
                     </StackPanel>
                   </StackPanel>
                 </Border>
@@ -233,15 +278,18 @@
           </StackPanel>
         </Grid>
 
-        <!-- Right: how email sign-in works, for staff and drivers -->
-        <Grid Grid.Column="2">
+        <!-- Right: how email sign-in works, for staff and drivers (sim centres only) -->
+        <Grid x:Name="SignInHelpCard" Grid.Column="2">
           <Border Style="{StaticResource Card}" Padding="20,18">
             <StackPanel>
               <TextBlock Text="HOW SIGN-IN WORKS" Style="{StaticResource CardHeading}"/>
               <TextBlock Style="{StaticResource Hint}" Margin="0,10,0,0" Text="1.  Type the driver's email and select Send code."/>
               <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="2.  The driver opens the email on their phone and reads out the 6-digit code. It works for 10 minutes."/>
               <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="3.  First time with this email? Enter the name to show on the leaderboard."/>
-              <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="4.  Preview, then Launch. Each sign-in is good for one session."/>
+              <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="4.  Optional: Link Discord. Next time the driver can sign in with Discord instead of waiting for an email."/>
+              <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="5.  Preview, then Launch. Each sign-in is good for one session."/>
+              <TextBlock Style="{StaticResource Hint}" Margin="0,18,0,0"
+                         Text="Discord already linked? Select Sign in with Discord and let the driver scan the QR code with their phone. Discord that isn't linked yet: sign in with email first, then Link Discord."/>
               <TextBlock Style="{StaticResource Hint}" Margin="0,18,0,0"
                          Text="No email? Check the spam and promotions folders, wait a minute, then select Resend. Five wrong codes means sending a new one."/>
             </StackPanel>

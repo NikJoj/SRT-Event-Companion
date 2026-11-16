@@ -18,6 +18,10 @@ public partial class MainWindow : Window
     private readonly ActiveSessionStore _activeSessionStore = new();
     private readonly SessionRestorationService _sessionRestorationService = new();
     private readonly GameProcessController _gameProcesses = new();
+    private readonly ContentStateStore _contentStore = new();
+    private readonly ContentInstaller _contentInstaller;
+    // Required packages of the chosen event that are neither installed nor skipped (null until checked); sent with check-ins.
+    private int? _contentMissing;
     private readonly OutboxStore _outbox = new();
     private readonly RetryBackoff _backoff = new();
     private readonly DispatcherTimer _syncTimer = new() { Interval = TimeSpan.FromSeconds(5) };
@@ -53,10 +57,26 @@ public partial class MainWindow : Window
 
     // Fetched from SRT just before launch; never stored on disk because it contains the server password.
     private RigConfig? _config;
+    private EventServerConfig? _event;     // the chosen event as fetched at preview: its server, password and mods
     private SessionPreparation? _preparation;
 
-    public MainWindow()
+    // Set up in first-run setup: sim centre rig or an individual's own PC, start with Windows, automatic updates.
+    private readonly AppSettingsStore _settingsStore;
+    private AppSettings _settings;
+    private bool IsIndividual => _settings.Mode == AppMode.Individual;
+    private RigOwner? _owner;              // individual PCs: the signed-in driver (from SRT)
+
+    // The event picked on the first screen (every live event has its own server and mods).
+    private IReadOnlyList<EventServerConfig> _liveEvents = Array.Empty<EventServerConfig>();
+    private EventServerConfig? _selectedEvent;
+    private bool _eventsLoaded;
+    private bool _showingEvents;
+
+    public MainWindow(AppSettingsStore settingsStore, AppSettings settings)
     {
+        _settingsStore = settingsStore;
+        _settings = settings;
+        _contentInstaller = new ContentInstaller(store: _contentStore);
         InitializeComponent();
         Loaded += (_, _) => RunInitChecks();
         _syncTimer.Tick += async (_, _) => await SyncTickAsync();
@@ -81,21 +101,26 @@ public partial class MainWindow : Window
             _api = new RigApiClient(_credential, Http);
             _outboxSender = new OutboxSender(_outbox, (body, token) => _api.PostIngestAsync(body, token));
             _syncTimer.Start();
-            if (!_startupCheckDone)
+            var firstCheck = !_startupCheckDone;
+            if (firstCheck)
             {
                 _startupCheckDone = true;
                 _ = SendHeartbeatAsync();
-                // Nobody is working on the rig-check screen yet, so a published update can install straight away.
-                _ = CheckForUpdateAsync(autoInstall: true);
             }
-            SetStatus(StatusRig, "✓ Paired", "#3DDC84");
-            RigLabel.Text = _credential.RigId;
+            // One request loads the live events and, at start-up, any published update (nobody is working yet, so it can install).
+            _ = LoadEventsAsync(checkForUpdate: firstCheck);
+            SetStatus(StatusRig, IsIndividual ? "✓ Signed in" : "✓ Paired", "#3DDC84");
+            RigLabel.Text = IsIndividual ? _owner?.DisplayName ?? "Signed in" : _credential.RigId;
         }
         else
         {
-            SetStatus(StatusRig, "Not paired", "#FF4D5E");
-            SetError(InitError, "This rig has not been paired. Click 'Pair this rig' to register it with SRT.");
+            SetStatus(StatusRig, IsIndividual ? "Not signed in" : "Not paired", "#FF4D5E");
+            SetError(InitError, IsIndividual
+                ? "You're not signed in on this PC. Select Sign in and use your email."
+                : "This rig has not been paired. Click 'Pair this rig' to register it with SRT.");
+            ShowEvents(Array.Empty<EventServerConfig>(), IsIndividual ? "Sign in to see the live events." : "Pair this rig to see the live events.");
         }
+        ApplyModeUi();
 
         var acDetection = AssettoCorsaPaths.DetectOnThisPc(_acFolders.Load());
         _acPaths = acDetection.Paths;
@@ -109,7 +134,7 @@ public partial class MainWindow : Window
                 ? $"{Environment.NewLine}{Environment.NewLine}⚠ {activeSteam.Message}" : string.Empty;
             ShowActiveSession(active, $"Active session for {active.DisplayName} ({active.SrtUsername}).{steamWarning}{Environment.NewLine}{Environment.NewLine}" +
                 "Select End Session & Restore when the driver is finished. Assetto Corsa and Content Manager will be closed for you.");
-            _ = ShowPasswordForActiveSessionAsync();
+            _ = ShowPasswordForActiveSessionAsync(active);
             StartLapRecording(active);
             return;
         }
@@ -136,7 +161,156 @@ public partial class MainWindow : Window
             SetStatus(StatusSteam, "—", "#8A919C");
         }
 
-        ProceedBtn.IsEnabled = _credential is not null && _acPaths is not null && steamMatches;
+        _pcReady = _credential is not null && _acPaths is not null && steamMatches;
+        UpdateInitButtons();
+    }
+
+    private bool _pcReady;
+
+    /// <summary>Continue needs a ready PC and a chosen event; Prepare needs the event and Assetto Corsa.</summary>
+    private void UpdateInitButtons()
+    {
+        ProceedBtn.IsEnabled = _pcReady && _selectedEvent is not null;
+        PrepareBtn.IsEnabled = _credential is not null && _acPaths is not null && _selectedEvent is not null;
+    }
+
+    // ── Event choice ─────────────────────────────────────────────────────────
+
+    private async Task LoadEventsAsync(bool checkForUpdate = false)
+    {
+        if (_api is null) return;
+        RefreshEventsBtn.IsEnabled = false;
+        if (!_eventsLoaded) EventStatus.Text = "Loading live events…";
+        try
+        {
+            var config = await _api.GetConfigAsync();
+            _eventsLoaded = true;
+            ApplyRigInfo(config.Rig);
+            ShowEvents(config.LiveEvents, config.LiveEvents.Count == 0
+                ? (IsIndividual
+                    ? "No events open to individual drivers are live right now. Check back when SRT opens one, then select Refresh."
+                    : "No events open to sim centres are live right now. Check back when SRT opens one, then select Refresh.")
+                : null);
+            if (checkForUpdate) await CheckForUpdateAsync(autoInstall: true, config);
+        }
+        catch (RigApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized && IsIndividual)
+        {
+            ShowEvents(Array.Empty<EventServerConfig>(), "You were signed out on this PC.");
+            SetStatus(StatusRig, "Signed out", "#FF4D5E");
+            SetError(InitError, "You were signed out, usually because your account was signed in on another PC. Select Sign in to use this PC again.");
+            ProceedBtn.IsEnabled = PrepareBtn.IsEnabled = false;
+        }
+        catch (Exception ex)
+        {
+            ShowEvents(_liveEvents, ex is RigApiException { StatusCode: null }
+                ? "SRT could not be reached, so the live events could not be loaded. Check the internet connection, then select Refresh."
+                : ex.Message);
+        }
+        finally { RefreshEventsBtn.IsEnabled = true; }
+    }
+
+    /// <summary>What SRT says about this PC: an individual's PC carries its owner, who drives every session.</summary>
+    private void ApplyRigInfo(RigInfo rig)
+    {
+        // SRT knows best how this PC is registered (for example after re-pairing a former home PC as a rig).
+        var mode = rig.IsIndividual ? AppMode.Individual : AppMode.Centre;
+        if (mode != _settings.Mode)
+        {
+            _settings = _settings with { Mode = mode };
+            _settingsStore.Save(_settings);
+        }
+        _owner = rig.IsIndividual ? rig.Owner : null;
+        RigLabel.Text = IsIndividual ? _owner?.DisplayName ?? "Signed in" : rig.Id;
+        ApplyModeUi();
+    }
+
+    private void ShowEvents(IReadOnlyList<EventServerConfig> events, string? status)
+    {
+        _liveEvents = events;
+        var keep = _selectedEvent?.Id ?? _settings.LastEventId;
+        _showingEvents = true;
+        EventList.Items.Clear();
+        foreach (var evt in events)
+        {
+            var detail = string.Join("  ·  ", new[] { evt.Track, evt.Car }.Where(v => !string.IsNullOrWhiteSpace(v))
+                .Append(evt.RequiredContent.Count == 0 ? "no extra mods" : $"{evt.RequiredContent.Count} required mod(s)"));
+            var content = new StackPanel();
+            content.Children.Add(new TextBlock { Text = evt.Name, FontFamily = (FontFamily)FindResource("BodySemiFont"), FontSize = 16 });
+            content.Children.Add(new TextBlock { Text = detail, Style = (Style)FindResource("Hint") });
+            EventList.Items.Add(new ListBoxItem { Content = content, Tag = evt });
+        }
+        var choice = EventChoice.Default(events, keep);
+        EventList.SelectedItem = EventList.Items.OfType<ListBoxItem>().FirstOrDefault(item => ReferenceEquals(item.Tag, choice));
+        _showingEvents = false;
+        SelectEvent(choice);
+        EventList.Visibility = events.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        EventStatus.Text = status ?? (events.Count == 1 ? "One event is live." : $"{events.Count} events are live. Select the one you're racing in.");
+    }
+
+    private void EventList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_showingEvents) return;
+        SelectEvent((EventList.SelectedItem as ListBoxItem)?.Tag as EventServerConfig);
+    }
+
+    private void SelectEvent(EventServerConfig? evt)
+    {
+        _selectedEvent = evt;
+        HeaderKicker.Text = evt is null ? "SIM RACING THARAVADU" : evt.Name.ToUpperInvariant();
+        if (evt is not null && !string.Equals(_settings.LastEventId, evt.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            _settings = _settings with { LastEventId = evt.Id };
+            try { _settingsStore.Save(_settings); } catch (IOException) { /* only the default choice next time */ }
+        }
+        // Mods missing for this event, for the next check-in (a quick look at the folders, no download).
+        if (evt is not null && _acPaths is not null)
+            _contentMissing = ContentWindow.CountNotReady(ContentChecker.CheckAll(evt.RequiredContent, _acPaths.InstallDirectory, _contentStore));
+        UpdateInitButtons();
+    }
+
+    private void RefreshEvents_Click(object sender, RoutedEventArgs e) => _ = LoadEventsAsync();
+
+    /// <summary>Sim centre: pairing, staff sign drivers in. Own PC: the signed-in driver races; nothing about centres.</summary>
+    private void ApplyModeUi()
+    {
+        var individual = IsIndividual;
+        StatusRigLabel.Text = individual ? "SRT account" : "Rig registration";
+        RigLabelCaption.Text = individual ? "DRIVER" : "RIG";
+        if (_credential is null) RigLabel.Text = individual ? "Not signed in" : "Not paired";
+        PairBtn.Content = individual ? "SIGN IN" : "PAIR THIS RIG";
+        PairBtn.Visibility = individual && _credential is not null && _owner is not null ? Visibility.Collapsed : Visibility.Visible;
+        InitHint.Text = individual
+            ? "Pick the event to race in. The app uses that event's server and installs the mods it needs on your PC."
+            : "Pick the event this rig is racing in. The app uses that event's server and installs the mods it needs.";
+        SignInHelpCard.Visibility = individual ? Visibility.Collapsed : Visibility.Visible;
+        DriverHeading.Text = individual ? "READY TO RACE" : "WHO'S DRIVING?";
+        DriverHint.Text = individual
+            ? "You're signed in on this PC. Check the name other drivers will see in the game, then select Preview."
+            : "The driver signs in with their email (SRT emails a 6-digit code) or with their linked Discord. Only a signed-in driver can race.";
+        ChangeDriverBtn.Visibility = individual ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private async void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        var who = _credential is null ? null : IsIndividual ? _owner?.DisplayName ?? "your account" : _credential.RigId;
+        var window = new SettingsWindow(_settingsStore, _settings, who, sessionActive: _activeSessionStore.Load() is not null,
+            api: IsIndividual ? _api : null, discordUsername: _owner?.DiscordUsername) { Owner = this };
+        var saved = window.ShowDialog() == true;
+        if (window.DiscordChanged && !window.ModeChanged)
+        {
+            await LoadEventsAsync();
+            if (StepDriver.Visibility == Visibility.Visible) ResetDriverStep();
+        }
+        if (!saved) return;
+        _settings = _settingsStore.Load() ?? _settings;
+        if (!window.ModeChanged) return;
+        // A new registration: start over on the first screen with the new sign-in.
+        _owner = null;
+        _eventsLoaded = false;
+        _startupCheckDone = false;
+        ResetDriverStep();
+        BackToInit_Click(this, e);
+        Recheck();
     }
 
     private void Proceed_Click(object sender, RoutedEventArgs e)
@@ -146,6 +320,56 @@ public partial class MainWindow : Window
     }
 
     private void CheckAgain_Click(object sender, RoutedEventArgs e) => Recheck();
+
+    // ── Event content (mods the chosen event requires) ────────────────────────
+
+    /// <summary>Installs the chosen event's mods ahead of time, before any driver is waiting.</summary>
+    private async void PrepareForEvent_Click(object sender, RoutedEventArgs e)
+    {
+        InitError.Visibility = Visibility.Collapsed;
+        if (_api is null || _acPaths is null) return;
+        PrepareBtn.IsEnabled = false;
+        try
+        {
+            if (_selectedEvent is null) { SetError(InitError, "Choose an event first."); return; }
+            // Fetch again: admins may have changed the event's mods since the list loaded.
+            var config = await _api.GetConfigAsync();
+            var evt = config.FindEvent(_selectedEvent.Id);
+            if (evt is null)
+            {
+                ShowEvents(config.LiveEvents, null);
+                SetError(InitError, $"{_selectedEvent.Name} is no longer live. Choose another event.");
+                return;
+            }
+            if (evt.RequiredContent.Count == 0)
+            {
+                _contentMissing = 0;
+                MessageBox.Show(this, $"{evt.Name} doesn't need any extra mods. This PC is ready.", "Prepare for event", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            EnsureEventContent(evt, alwaysShow: true);
+        }
+        catch (Exception ex) { SetError(InitError, ex is RigApiException { StatusCode: null } ? "SRT could not be reached. Check the internet connection." : ex.Message); }
+        finally { PrepareBtn.IsEnabled = true; _ = SendHeartbeatAsync(); }
+    }
+
+    /// <summary>
+    /// True when every package the event requires is installed or skipped. Otherwise opens the content window
+    /// (install, or skip what the rig already has) and returns whether everything is ready afterwards.
+    /// </summary>
+    private bool EnsureEventContent(EventServerConfig evt, bool alwaysShow = false)
+    {
+        if (_api is null) return true;
+        var paths = RequirePaths();
+        var checks = ContentChecker.CheckAll(evt.RequiredContent, paths.InstallDirectory, _contentStore);
+        _contentMissing = ContentWindow.CountNotReady(checks);
+        if (_contentMissing == 0 && !alwaysShow) return true;
+
+        var window = new ContentWindow(evt, _api, paths, _contentInstaller, _contentStore, _gameProcesses) { Owner = this };
+        window.ShowDialog();
+        _contentMissing = ContentWindow.CountNotReady(ContentChecker.CheckAll(evt.RequiredContent, paths.InstallDirectory, _contentStore));
+        return _contentMissing == 0;
+    }
 
     // ── Manual Assetto Corsa folders (when automatic detection fails) ─────────
 
@@ -218,7 +442,15 @@ public partial class MainWindow : Window
 
     private void PairRig_Click(object sender, RoutedEventArgs e)
     {
-        new PairRigWindow { Owner = this }.ShowDialog();
+        if (IsIndividual)
+        {
+            // Sign in again with email (a new PC, or signed out because the account moved to another PC).
+            var setup = new SetupWindow(_settingsStore, _settings, changingMode: true) { Owner = this };
+            if (setup.ShowDialog() == true && setup.Result is not null) _settings = setup.Result;
+            _owner = null;
+        }
+        else new PairRigWindow { Owner = this }.ShowDialog();
+        _eventsLoaded = false;
         Recheck();
     }
 
@@ -239,7 +471,7 @@ public partial class MainWindow : Window
         StepDriver.Visibility = Visibility.Visible;
         StepLaunch.Visibility = Visibility.Collapsed;
         DriverError.Visibility = Visibility.Collapsed;
-        if (_driverToken is not null) DisplayNameInput.Focus();
+        if (IsIndividual || _driverToken is not null) DisplayNameInput.Focus();
         else if (CodePanel.Visibility == Visibility.Visible) CodeInput.Focus();
         else EmailInput.Focus();
     }
@@ -250,6 +482,7 @@ public partial class MainWindow : Window
         _driverToken = null;
         _selectedDriver = null;
         _config = null;
+        _event = null;
         _preparation = null;
         _resendTimer.Stop();
         EmailPanel.Visibility = Visibility.Visible;
@@ -261,11 +494,107 @@ public partial class MainWindow : Window
         CodeInput.Text = string.Empty;
         CodeStatus.Text = string.Empty;
         DriverPanel.Visibility = Visibility.Collapsed;
+        DiscordRow.Visibility = Visibility.Collapsed;
         NewProfilePanel.Visibility = Visibility.Collapsed;
         LeaderboardNameInput.Text = string.Empty;
         InGamePanel.Visibility = Visibility.Collapsed;
         DisplayNameInput.Text = string.Empty;
         DriverStatus.Visibility = Visibility.Collapsed;
+
+        // Own PC: the signed-in driver races; no email code per session.
+        if (IsIndividual && _owner is { } owner)
+        {
+            EmailPanel.Visibility = Visibility.Collapsed;
+            DriverPanel.Visibility = Visibility.Visible;
+            InGamePanel.Visibility = Visibility.Visible;
+            _selectedDriver = new DriverMatch(owner.ProfileId, owner.DisplayName, owner.SrtUsername, null, null);
+            DriverPanelTitle.Text = $"✓ {owner.DisplayName}";
+            DriverPanelHint.Text = "Signed in on this PC. Your laps go on your SRT profile.";
+            DisplayNameInput.Text = owner.DisplayName;
+            ShowDiscordRow(owner.DiscordUsername, canLink: true);
+        }
+    }
+
+    // ── Discord: sign in with a linked Discord, or link one (optional) ───────
+
+    private void ShowDiscordRow(string? discordUsername, bool canLink)
+    {
+        DiscordRow.Visibility = Visibility.Visible;
+        if (discordUsername is not null)
+        {
+            DiscordStatus.Text = $"Discord: @{discordUsername} ✓";
+            LinkDiscordBtn.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            DiscordStatus.Text = "Discord not linked. Optional: link it to sign in with Discord next time.";
+            LinkDiscordBtn.Visibility = canLink ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    private void DiscordSignIn_Click(object sender, RoutedEventArgs e)
+    {
+        DriverError.Visibility = Visibility.Collapsed;
+        if (_api is not { } api) { SetError(DriverError, "This rig is not paired with SRT."); return; }
+        var window = new DiscordWindow("SIGN IN WITH DISCORD",
+            "For drivers who already linked Discord to SRT. Scan the code with your phone and sign in to Discord there.",
+            () => api.StartDiscordAsync("sign-in"), poll => api.PollDiscordAsync(poll), sharedPc: true) { Owner = this };
+        window.ShowDialog();
+        if (window.Result is not { DriverToken: { } token, Driver: { } driver } result) return;
+
+        _driverEmail = null;
+        _driverToken = token;
+        _resendTimer.Stop();
+        EmailPanel.Visibility = Visibility.Collapsed;
+        CodePanel.Visibility = Visibility.Collapsed;
+        DriverPanel.Visibility = Visibility.Visible;
+        InGamePanel.Visibility = Visibility.Visible;
+        ShowVerifiedDriver(driver with { DiscordUsername = driver.DiscordUsername ?? result.DiscordUsername });
+        DisplayNameInput.Focus();
+    }
+
+    private async void LinkDiscord_Click(object sender, RoutedEventArgs e)
+    {
+        DriverError.Visibility = Visibility.Collapsed;
+        if (_api is not { } api) return;
+        string? token = null;
+        if (!IsIndividual)
+        {
+            if (_driverToken is null) { SetError(DriverError, "Sign the driver in with their email first."); return; }
+            token = _driverToken;
+            // A new email: create the driver first, so Discord is linked to their profile.
+            if (_selectedDriver is null)
+            {
+                if (LeaderboardNameInput.Text.Trim().Length < 2) { SetError(DriverError, "Enter the name to show on the leaderboard first."); return; }
+                var typed = DisplayNameInput.Text;
+                try { ShowVerifiedDriver(await api.CreateEmailProfileAsync(_driverToken, LeaderboardNameInput.Text.Trim())); }
+                catch (Exception ex) { SetError(DriverError, ex.Message); return; }
+                DisplayNameInput.Text = typed;
+            }
+        }
+        var window = new DiscordWindow("LINK DISCORD",
+            "Optional. Links the driver's Discord to their SRT profile, so they can sign in with Discord next time and their SRT races show up together.",
+            () => api.StartDiscordAsync("link", token), poll => api.PollDiscordAsync(poll), sharedPc: !IsIndividual) { Owner = this };
+        window.ShowDialog();
+        if (window.Result is not { } result) return;
+        var linkedName = result.Outcome == "linked" ? result.DiscordUsername : null;
+        if (IsIndividual && _owner is { } owner)
+        {
+            // A merge can move the PC to the driver's older SRT profile: reload who owns it.
+            _owner = owner with { DiscordUsername = linkedName ?? owner.DiscordUsername };
+            if (result.Driver is { } merged) _owner = _owner with { ProfileId = merged.ProfileId, DisplayName = merged.DisplayName, SrtUsername = merged.SrtUsername ?? _owner.SrtUsername };
+            _selectedDriver = new DriverMatch(_owner.ProfileId, _owner.DisplayName, _owner.SrtUsername, _owner.DiscordUsername, null);
+            DriverPanelTitle.Text = $"✓ {_owner.DisplayName}";
+            ShowDiscordRow(_owner.DiscordUsername, canLink: true);
+            if (result.Outcome == "pending-review") DiscordStatus.Text = "Discord: waiting for an SRT admin to confirm your older SRT profile.";
+        }
+        else if (result.Driver is { } driver)
+        {
+            var typed = DisplayNameInput.Text;
+            ShowVerifiedDriver(driver with { DiscordUsername = linkedName ?? driver.DiscordUsername });
+            DisplayNameInput.Text = typed;
+            if (result.Outcome == "pending-review") DiscordStatus.Text = "Discord: waiting for an SRT admin to confirm the driver's older SRT profile.";
+        }
     }
 
     private void BackToInit_Click(object sender, RoutedEventArgs e)
@@ -377,6 +706,7 @@ public partial class MainWindow : Window
                 DriverPanelTitle.Text = "✓ Email verified  ·  new driver";
                 DriverPanelHint.Text = _driverEmail;
                 NewProfilePanel.Visibility = Visibility.Visible;
+                ShowDiscordRow(null, canLink: true);
                 LeaderboardNameInput.Focus();
             }
         }
@@ -394,8 +724,9 @@ public partial class MainWindow : Window
     {
         _selectedDriver = driver;
         DriverPanelTitle.Text = $"✓ {driver.DisplayName}";
-        DriverPanelHint.Text = $"Email verified  ·  {_driverEmail}";
+        DriverPanelHint.Text = _driverEmail is null ? "Signed in with Discord" : $"Email verified  ·  {_driverEmail}";
         NewProfilePanel.Visibility = Visibility.Collapsed;
+        ShowDiscordRow(driver.DiscordUsername, canLink: _driverToken is not null);
         if (string.IsNullOrWhiteSpace(DisplayNameInput.Text)) DisplayNameInput.Text = driver.DisplayName;
     }
 
@@ -412,8 +743,10 @@ public partial class MainWindow : Window
     private async void PreviewJoin_Click(object sender, RoutedEventArgs e)
     {
         DriverError.Visibility = Visibility.Collapsed;
-        if (_api is null) { SetError(DriverError, "This rig is not paired with SRT."); return; }
-        if (_driverToken is null) { SetError(DriverError, "Sign the driver in first: send a code to their email, then enter it."); return; }
+        if (_api is null) { SetError(DriverError, IsIndividual ? "You're not signed in on this PC. Go back and select Sign in." : "This rig is not paired with SRT."); return; }
+        if (_selectedEvent is null) { SetError(DriverError, "Go back and choose an event first."); return; }
+        if (IsIndividual && _selectedDriver is null) { SetError(DriverError, "Your SRT account hasn't loaded yet. Go back, select Refresh, and try again."); return; }
+        if (!IsIndividual && _driverToken is null) { SetError(DriverError, "Sign the driver in first: send a code to their email, then enter it."); return; }
         if (_selectedDriver is null && LeaderboardNameInput.Text.Trim().Length < 2) { SetError(DriverError, "Enter the name to show on the leaderboard."); return; }
 
         var displayName = DisplayNameInput.Text.Trim();
@@ -426,30 +759,37 @@ public partial class MainWindow : Window
             // A new email: create the driver first, so the session is linked to their profile.
             if (_selectedDriver is null)
             {
-                ShowVerifiedDriver(await _api.CreateEmailProfileAsync(_driverToken, LeaderboardNameInput.Text.Trim()));
+                ShowVerifiedDriver(await _api.CreateEmailProfileAsync(_driverToken!, LeaderboardNameInput.Text.Trim()));
                 DisplayNameInput.Text = displayName;
             }
             var username = SrtUsername.Normalize(_selectedDriver!.SrtUsername);
             if (!SrtUsername.IsValid(username))
                 throw new InvalidOperationException("This driver's SRT profile is missing its handle. Select Change driver and sign in again, or ask an SRT admin.");
 
-            // Always fetch the live event just before launch, so admin changes apply immediately.
+            // Always fetch the chosen event just before launch, so admin changes apply immediately.
             _config = await _api.GetConfigAsync(username);
             _ = SendHeartbeatAsync(); // driver check-in
             // A driver can only race on one rig at a time.
             if (_config.DriverBusy is { } busy) throw new InvalidOperationException(busy.Message);
-            if (_config.Event is null)
-                throw new InvalidOperationException("No Kerala Race Wars event is live. Ask an SRT admin to make an event live in the dashboard (Kerala Race Wars → Event & server).");
+            var evt = _config.FindEvent(_selectedEvent.Id);
+            if (evt is null)
+            {
+                ShowEvents(_config.LiveEvents, null);
+                throw new InvalidOperationException($"{_selectedEvent.Name} is no longer live. Select Back and choose another event.");
+            }
+            _event = evt;
+            // The event's mods must be on the PC (installed by the app, or skipped) before the driver can join.
+            if (!EnsureEventContent(evt))
+                throw new InvalidOperationException("This event's mods are not all on this PC yet. Select Preview again to install them, or skip the ones already installed.");
 
-            _preparation = BuildPreparation(_config, SrtUsername.Display(username), displayName);
+            _preparation = BuildPreparation(_config.Rig, evt, SrtUsername.Display(username), displayName);
             var cmPreview = _cmSettings.PreviewPlayerNameChange(_cmSettings.DefaultValuesPath, displayName);
-            var evt = _config.Event;
 
             var text =
                 $"Event:         {evt.Name}{Environment.NewLine}" +
                 (evt.Track is null && evt.Car is null ? string.Empty : $"Track / car:   {string.Join(" · ", new[] { evt.Track, evt.Car }.Where(v => v is not null))}{Environment.NewLine}") +
                 $"Server:        {evt.ServerHost}:{evt.HttpPort}{Environment.NewLine}" +
-                $"Driver:        {_selectedDriver.DisplayName}  ·  {_driverEmail}{Environment.NewLine}" +
+                $"Driver:        {_selectedDriver.DisplayName}{(_driverEmail is null ? string.Empty : $"  ·  {_driverEmail}")}{Environment.NewLine}" +
                 $"Display name:  {displayName}{Environment.NewLine}{Environment.NewLine}" +
                 $"AC name now:   {_preparation.ProfileChange.Current.OfflineDriverName ?? "—"}{Environment.NewLine}" +
                 $"AC name after: {_preparation.ProfileChange.Proposed.OfflineDriverName}{Environment.NewLine}" +
@@ -501,13 +841,13 @@ public partial class MainWindow : Window
         PasswordPanel.Visibility = string.IsNullOrEmpty(password) ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    private async Task ShowPasswordForActiveSessionAsync()
+    private async Task ShowPasswordForActiveSessionAsync(ActiveRigSession active)
     {
         if (_api is null) return;
         try
         {
             _config = await _api.GetConfigAsync();
-            ShowPassword(_config.Event?.ServerPassword);
+            ShowPassword((_config.FindEvent(active.EventId) ?? (active.EventId is null ? _config.Event : null))?.ServerPassword);
         }
         catch { /* Offline: the password simply is not shown. */ }
     }
@@ -536,8 +876,9 @@ public partial class MainWindow : Window
         {
             if (_activeSessionStore.Load() is not null)
                 throw new InvalidOperationException("End or restore the existing session before launching another driver.");
-            if (_preparation is null || _config?.Event is null || _credential is null)
+            if (_preparation is null || _config is null || _event is null || _credential is null)
                 throw new InvalidOperationException("Preview the session again before launching.");
+            var evt = _event;
             // Steam could have been switched since startup; laps are matched to drivers by this account.
             if (SteamAccount.Check(_credential.SteamId) is { IsOk: false } launchSteam)
                 throw new InvalidOperationException(launchSteam.Message);
@@ -548,6 +889,15 @@ public partial class MainWindow : Window
                 try { latest = await _api.GetConfigAsync(_preparation.Request.Driver.SrtUsername); }
                 catch (Exception) { /* offline: SRT still refuses a second live session when the start reaches it */ }
                 if (latest?.DriverBusy is { } busyAtLaunch) throw new InvalidOperationException(busyAtLaunch.Message);
+                if (latest is not null)
+                {
+                    if (latest.FindEvent(evt.Id) is not { } latestEvent)
+                        throw new InvalidOperationException($"{evt.Name} is no longer live. Select Edit driver, then Back, and choose another event.");
+                    // Admins may have changed the server or added required content since the preview.
+                    if (!EnsureEventContent(latestEvent))
+                        throw new InvalidOperationException("This event's mods are not all on this PC yet. Install them, or skip the ones already installed, then launch again.");
+                    evt = _event = latestEvent;
+                }
             }
 
             var paths = RequirePaths();
@@ -590,24 +940,24 @@ public partial class MainWindow : Window
                 paths.RaceIniPath, raceBackup,
                 _cmSettings.DefaultValuesPath, cmBackup,
                 now,
-                _config.Event.Id,
+                evt.Id,
                 _config.Rig.DisplayName,
-                _driverToken);
+                IsIndividual ? null : _driverToken);
             _activeSessionStore.Save(session);
 
             _outbox.Enqueue(IngestMessages.StartSession(_credential.RigId, session));
-            new ContentManagerLauncher().Launch(_config.Event.ToJoinTarget());
+            new ContentManagerLauncher().Launch(evt.ToJoinTarget());
 
             ShowLaunchStep(
                 $"✓ Content Manager launched.{Environment.NewLine}" +
-                $"Event:  {_config.Event.Name}{Environment.NewLine}" +
-                $"Driver: {displayName} ({_driverEmail}){Environment.NewLine}{Environment.NewLine}" +
+                $"Event:  {evt.Name}{Environment.NewLine}" +
+                $"Driver: {displayName}{(_driverEmail is null ? string.Empty : $" ({_driverEmail})")}{Environment.NewLine}{Environment.NewLine}" +
                 $"AC + CM names updated. Backups saved.{Environment.NewLine}" +
                 $"AC backup:  {raceBackup}{Environment.NewLine}" +
                 $"CM backup:  {cmBackup}{Environment.NewLine}{Environment.NewLine}" +
                 "When the driver is finished, select End Session & Restore.",
                 sessionActive: true);
-            ShowPassword(_config.Event.ServerPassword);
+            ShowPassword(evt.ServerPassword);
             StartLapRecording(session);
             _ = SendHeartbeatAsync();
 
@@ -775,17 +1125,18 @@ public partial class MainWindow : Window
         {
             var steamOk = SteamAccount.Check(_credential.SteamId).IsOk;
             await _api.PostIngestAsync(IngestMessages.Heartbeat(_credential.RigId, AppVersion.Current, _outbox.Count,
-                inSession: _activeSessionStore.Load() is not null, steamOk));
+                inSession: _activeSessionStore.Load() is not null, steamOk, _contentMissing));
         }
         catch { /* Offline: the next check-in will catch up. Admin shows the rig as offline meanwhile. */ }
     }
 
-    private async Task CheckForUpdateAsync(bool autoInstall)
+    /// <param name="config">Already fetched (start-up loads the events and the release in one request).</param>
+    private async Task CheckForUpdateAsync(bool autoInstall, RigConfig? config = null)
     {
         if (_api is null || _installingUpdate) return;
         try
         {
-            var release = (await _api.GetConfigAsync()).App;
+            var release = (config ?? await _api.GetConfigAsync()).App;
             _pendingRelease = release is not null && AppVersion.IsNewer(release.Version, AppVersion.Current) ? release : null;
         }
         catch { return; }
@@ -793,13 +1144,24 @@ public partial class MainWindow : Window
         UpdateBtn.Visibility = _pendingRelease is null ? Visibility.Collapsed : Visibility.Visible;
         if (_pendingRelease is null) return;
         UpdateBtn.Content = $"UPDATE TO V{_pendingRelease.Version}";
-        if (autoInstall && CanUpdateNow()) await InstallUpdateAsync();
+        // Automatic updates can be turned off in Settings; the Update button still appears.
+        if (autoInstall && _settings.AutoUpdate && CanUpdateNow() && !IsDevelopmentBuild) await InstallUpdateAsync();
     }
+
+    /// <summary>
+    /// Builds run from source (dotnet run / Visual Studio, Debug) never update themselves: they report version 1.0.0, so every
+    /// published release looks newer and would replace the code being tested. The update button still works if clicked.
+    /// </summary>
+#if DEBUG
+    private const bool IsDevelopmentBuild = true;
+#else
+    private const bool IsDevelopmentBuild = false;
+#endif
 
     /// <summary>Never during a session or while staff are setting up a driver.</summary>
     private bool CanUpdateNow() =>
         _activeSessionStore.Load() is null && StepLaunch.Visibility != Visibility.Visible &&
-        (StepInit.Visibility == Visibility.Visible || (_driverEmail is null && EmailInput.Text.Length == 0));
+        (StepInit.Visibility == Visibility.Visible || (!IsIndividual && _driverEmail is null && EmailInput.Text.Length == 0));
 
     private async void InstallUpdate_Click(object sender, RoutedEventArgs e)
     {
@@ -880,13 +1242,13 @@ public partial class MainWindow : Window
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    private SessionPreparation BuildPreparation(RigConfig config, string srtUsername, string displayName)
+    private SessionPreparation BuildPreparation(RigInfo rig, EventServerConfig evt, string srtUsername, string displayName)
     {
         var rigConfiguration = new RigSessionConfiguration(
-            config.Rig.Id,
-            config.Event!.Id,
+            rig.Id,
+            evt.Id,
             ContentManagerIntegrationStatus.Verified,
-            config.Event.ToJoinTarget());
+            evt.ToJoinTarget());
         var request = new SessionRequest(new SessionDriver(srtUsername, displayName));
         return new SessionPreparationService(_rigProfileService).Prepare(rigConfiguration, request, RequirePaths().RaceIniPath);
     }

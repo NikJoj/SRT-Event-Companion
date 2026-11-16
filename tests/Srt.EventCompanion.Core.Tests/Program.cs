@@ -39,6 +39,14 @@ var tests = new (string Name, Action Test)[]
     ("keeps at most five favourite drivers", KeepsFiveFavourites),
     ("reads the centre's recent drivers from SRT", ReadsRecentDrivers),
     ("asks SRT whether the driver is racing on another rig", ReadsDriverBusy),
+    ("places zip files exactly like the admin page does", PlansPackagesLikeTheWebsite),
+    ("refuses to write outside the Assetto Corsa folder", RefusesUnsafePaths),
+    ("switches Python apps on in python.ini", EnablesPythonApps),
+    ("tells installed, skipped, found and missing content apart", ChecksContentStatus),
+    ("downloads, verifies and installs a package, backing up what it replaces", InstallsPackages),
+    ("installs any file type, backing up a folder it replaces", InstallsAnyFileTypeWithBackup),
+    ("deletes a download that fails its checksum", RejectsTamperedDownload),
+    ("reads required content from the rig config and sends readiness", ReadsRequiredContent),
     ("only installs releases newer than the running version", ComparesVersions),
     ("installs only downloads that match the published SHA-256", VerifiesUpdateDownloads),
     ("heartbeat reports version, backlog, state and Steam", BuildsHeartbeat),
@@ -46,7 +54,13 @@ var tests = new (string Name, Action Test)[]
     ("checks driver emails the way SRT does", ChecksDriverEmails),
     ("signs a driver in with an emailed code", SignsDriverInWithEmailCode),
     ("start-session carries the driver's email sign-in", StartSessionCarriesDriverToken),
-    ("an expired sign-in shows SRT's message, not a re-pair prompt", ExpiredSignInKeepsMessage)
+    ("an expired sign-in shows SRT's message, not a re-pair prompt", ExpiredSignInKeepsMessage),
+    ("reads every live event and finds the chosen one", ReadsEveryLiveEvent),
+    ("picks the last event used, else the newest", PicksDefaultEvent),
+    ("keeps setup choices; rigs from 1.0.x skip setup", KeepsAppSettings),
+    ("reads an individual's PC and its owner from the rig config", ReadsIndividualRig),
+    ("signs an individual up with an emailed code", SignsIndividualUp),
+    ("starts Discord sign-in and reads the result once it's done", RunsDiscordSignIn)
 };
 
 var failures = 0;
@@ -511,7 +525,7 @@ static void SteamCheckExplainsProblem()
 {
     var ok = SteamCheck.Evaluate("76561198354778832", "76561198354778832");
     AssertTrue(ok.IsOk);
-    AssertEqual("✓ Matches rig (…8832)", ok.Label);
+    AssertEqual("✓ Matches (…8832)", ok.Label);
 
     var wrong = SteamCheck.Evaluate("76561198354778832", "76561198000000001");
     AssertEqual("Mismatch", wrong.Status.ToString());
@@ -780,6 +794,308 @@ static void AssertThrowsArgumentOutOfRange(Action action)
     throw new InvalidOperationException("Expected ArgumentOutOfRangeException.");
 }
 
+static byte[] MakeZip(params (string Name, string Text)[] files)
+{
+    using var memory = new MemoryStream();
+    using (var archive = new System.IO.Compression.ZipArchive(memory, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+        foreach (var (name, text) in files)
+        {
+            var entry = archive.CreateEntry(name);
+            using var writer = new StreamWriter(entry.Open());
+            writer.Write(text);
+        }
+    return memory.ToArray();
+}
+
+static string Sha(byte[] data) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)).ToLowerInvariant();
+
+static (ContentInstaller Installer, ContentStateStore Store, string Ac, string Docs, string Root) ContentRig(byte[] zip, Action<HttpRequestMessage>? seen = null)
+{
+    var root = Path.Combine(Path.GetTempPath(), "srt-content-" + Guid.NewGuid().ToString("N"));
+    var ac = Path.Combine(root, "assettocorsa"); var docs = Path.Combine(root, "Documents", "Assetto Corsa");
+    Directory.CreateDirectory(Path.Combine(ac, "content", "cars")); Directory.CreateDirectory(Path.Combine(docs, "cfg"));
+    var http = new HttpClient(new StubHandler(request =>
+    {
+        seen?.Invoke(request);
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(zip) };
+    }));
+    var store = new ContentStateStore(Path.Combine(root, "state.json"));
+    return (new ContentInstaller(http, Path.Combine(root, "cache"), store), store, ac, docs, root);
+}
+
+static Func<CancellationToken, Task<PackageDownload>> LinkFor(ContentPackage p) =>
+    _ => Task.FromResult(new PackageDownload("https://acct.r2.cloudflarestorage.com/srt-content/packages/7/x.zip?sig=1", p.Sha256, p.SizeBytes, p.Name, 3600));
+
+static void PlansPackagesLikeTheWebsite()
+{
+    // Same cases as the website's krw-package.js test.
+    var car = PackagePlanner.Plan(new[] { ("ks_bmw_m4/data.acd", 1000L), ("ks_bmw_m4/skins/red/livery.dds", 50L), ("__MACOSX/._junk", 1L), ("ks_bmw_m4/", 0L) }, "car");
+    AssertEqual("content/cars/ks_bmw_m4", string.Join(",", car.Targets));
+    AssertEqual("2", car.Files.Count.ToString());
+    var wrapped = PackagePlanner.Plan(new[] { ("Helicorsa v2/apps/python/helicorsa/helicorsa.py", 8L), ("Helicorsa v2/content/fonts/heli.ttf", 1L) }, "python-app");
+    AssertEqual("apps/python/helicorsa,content/fonts/heli.ttf", string.Join(",", wrapped.Targets));
+    AssertEqual("apps/python/helicorsa/helicorsa.py", wrapped.Files[0].RelativePath);
+    AssertEqual("Helicorsa v2/apps/python/helicorsa/helicorsa.py", wrapped.Files[0].ZipEntry);
+    // Mods are trusted: helper scripts and loose files are fine; only paths that leave the AC folder are refused.
+    var rss = PackagePlanner.Plan(new[] { ("rss_gtm_furiano_96_v6/data.acd", 1L), ("rss_gtm_furiano_96_v6/install_csp-physics.bat", 1L), ("readme.txt", 1L) }, "car");
+    AssertTrue(rss.IsValid);
+    AssertEqual("content/cars/readme.txt,content/cars/rss_gtm_furiano_96_v6", string.Join(",", rss.Targets));
+    AssertEqual("extension/config/cars", string.Join(",", PackagePlanner.Plan(new[] { ("extension/config/cars/kunos/rss.ini", 1L) }, "ac-root").Targets));
+    var bad = PackagePlanner.Plan(new[] { ("../evil.txt", 1L), ("mycar/data.acd", 1L) }, "car");
+    AssertTrue(!bad.IsValid && bad.Errors.Count == 1);
+    AssertTrue(!PackagePlanner.Plan(new[] { ("C:/Windows/x.txt", 1L) }, "car").IsValid);
+}
+
+static void RefusesUnsafePaths()
+{
+    var root = Path.Combine(Path.GetTempPath(), "srt-safe");
+    AssertTrue(ContentInstaller.SafePath(root, "content/cars/x/data.acd").StartsWith(Path.GetFullPath(root)));
+    AssertThrowsAny(() => ContentInstaller.SafePath(root, "../outside.txt"));
+    AssertThrowsAny(() => ContentInstaller.SafePath(root, "content/../../outside.txt"));
+}
+
+static void EnablesPythonApps()
+{
+    var ini = Path.Combine(Path.GetTempPath(), "srt-python-" + Guid.NewGuid().ToString("N") + ".ini");
+    File.WriteAllText(ini, "[HELICORSA]\nACTIVE=0\n\n[OTHERAPP]\nACTIVE=1\n");
+    ContentInstaller.EnablePythonApp(ini, "helicorsa");
+    ContentInstaller.EnablePythonApp(ini, "realpenalty");
+    var text = File.ReadAllText(ini).Replace("\r\n", "\n");
+    AssertTrue(text.Contains("[HELICORSA]\nACTIVE=1"));
+    AssertTrue(text.Contains("[OTHERAPP]\nACTIVE=1"));
+    AssertTrue(text.Contains("[REALPENALTY]\nACTIVE=1"));
+}
+
+static void ChecksContentStatus()
+{
+    var (installer, store, ac, _, _) = ContentRig(Array.Empty<byte>());
+    var p = new ContentPackage("7", "Kerala Hills", "track", new string('a', 64), 10, new[] { "content/tracks/kerala_hills" });
+    AssertEqual("Missing", ContentChecker.CheckAll(new[] { p }, ac, store)[0].Status.ToString());
+    Directory.CreateDirectory(Path.Combine(ac, "content", "tracks", "kerala_hills"));
+    AssertEqual("FoundOnRig", ContentChecker.CheckAll(new[] { p }, ac, store)[0].Status.ToString());
+    installer.MarkSkipped(p);
+    var skipped = ContentChecker.CheckAll(new[] { p }, ac, store)[0];
+    AssertTrue(skipped.IsReady && skipped.Status == ContentStatus.Skipped);
+    // A new upload of the same mod is a different file: skipping the old one doesn't count.
+    AssertEqual("FoundOnRig", ContentChecker.CheckAll(new[] { p with { Sha256 = new string('b', 64) } }, ac, store)[0].Status.ToString());
+}
+
+static void InstallsPackages()
+{
+    var zip = MakeZip(("srt_test/srt_test.py", "print(1)"), ("srt_test/lib/util.py", "x=1"));
+    HttpRequestMessage? request = null;
+    var (installer, store, ac, docs, _) = ContentRig(zip, r => request = r);
+    var p = new ContentPackage("9", "SRT test app", "python-app", Sha(zip), zip.Length, new[] { "apps/python/srt_test" });
+    // An older copy is already there: it is backed up, not deleted.
+    Directory.CreateDirectory(Path.Combine(ac, "apps", "python", "srt_test"));
+    File.WriteAllText(Path.Combine(ac, "apps", "python", "srt_test", "old.py"), "old");
+    var stages = new List<string>();
+    var result = installer.InstallAsync(p, LinkFor(p), ac, docs, new SyncProgress<ContentProgress>(x => stages.Add(x.Stage))).GetAwaiter().GetResult();
+
+    AssertEqual("print(1)", File.ReadAllText(Path.Combine(ac, "apps", "python", "srt_test", "srt_test.py")));
+    AssertTrue(File.Exists(Path.Combine(ac, "apps", "python", "srt_test", "lib", "util.py")));
+    AssertTrue(!File.Exists(Path.Combine(ac, "apps", "python", "srt_test", "old.py")));
+    AssertTrue(result.BackupFolder is not null && File.Exists(Path.Combine(result.BackupFolder, "apps", "python", "srt_test", "old.py")));
+    AssertEqual("srt_test", string.Join(",", result.EnabledPythonApps));
+    AssertTrue(File.ReadAllText(Path.Combine(docs, "cfg", "python.ini")).Contains("[SRT_TEST]"));
+    AssertTrue(stages.Contains("Downloading") && stages.Contains("Unpacking"));
+    AssertTrue(request!.RequestUri!.Host.EndsWith("r2.cloudflarestorage.com"));
+    AssertTrue(!Directory.EnumerateDirectories(ac, "_srt_staging_*").Any()); // staging cleaned up
+    AssertEqual("Installed", ContentChecker.CheckAll(new[] { p }, ac, store)[0].Status.ToString());
+}
+
+static void InstallsAnyFileTypeWithBackup()
+{
+    var zip = MakeZip(("rss_gtm/data.acd", "new"), ("rss_gtm/install_csp-physics.bat", "@echo off"));
+    var (installer, _, ac, docs, _) = ContentRig(zip);
+    var existing = Path.Combine(ac, "content", "cars", "rss_gtm");
+    Directory.CreateDirectory(existing);
+    File.WriteAllText(Path.Combine(existing, "data.acd"), "old");
+    var p = new ContentPackage("10", "RSS GTM", "car", Sha(zip), zip.Length, new[] { "content/cars/rss_gtm" });
+    var result = installer.InstallAsync(p, LinkFor(p), ac, docs).GetAwaiter().GetResult();
+    AssertEqual("new", File.ReadAllText(Path.Combine(existing, "data.acd")));
+    AssertTrue(File.Exists(Path.Combine(existing, "install_csp-physics.bat")));
+    AssertEqual("old", File.ReadAllText(Path.Combine(result.BackupFolder!, "content", "cars", "rss_gtm", "data.acd")));
+}
+
+static void RejectsTamperedDownload()
+{
+    var zip = MakeZip(("srt_test/srt_test.py", "print(1)"));
+    var (installer, _, ac, docs, root) = ContentRig(zip);
+    var p = new ContentPackage("11", "SRT test app", "python-app", new string('0', 64), zip.Length, new[] { "apps/python/srt_test" });
+    var link = LinkFor(p);
+    try { installer.InstallAsync(p, link, ac, docs).GetAwaiter().GetResult(); throw new InvalidOperationException("expected a failure"); }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("security check")) { }
+    AssertTrue(!Directory.EnumerateFiles(Path.Combine(root, "cache")).Any());
+    AssertTrue(!Directory.Exists(Path.Combine(ac, "apps", "python", "srt_test")));
+}
+
+static void ReadsRequiredContent()
+{
+    var api = new RigApiClient(new RigCredential("https://www.simracingtharavadu.in", "TTL-01", "t", "76561198000000000"),
+        new HttpClient(new StubHandler(request => request.RequestUri!.AbsolutePath.EndsWith("kerala-race-wars-content")
+            ? Json(HttpStatusCode.OK, "{\"url\":\"https://acct.r2.cloudflarestorage.com/x.zip?sig\",\"sha256\":\"" + new string('a', 64) + "\",\"sizeBytes\":10,\"name\":\"Kerala Hills\",\"expiresInSeconds\":3600}")
+            : Json(HttpStatusCode.OK, "{\"rig\":{\"id\":\"TTL-01\",\"displayName\":\"Rig 01\",\"centreId\":\"ttl\",\"centreName\":\"TTL\"},\"event\":{\"id\":\"krw\",\"name\":\"KRW\",\"serverHost\":\"1.2.3.4\",\"httpPort\":8081," +
+              "\"packages\":[{\"id\":\"7\",\"name\":\"Kerala Hills\",\"kind\":\"track\",\"sha256\":\"" + new string('a', 64) + "\",\"sizeBytes\":10,\"targets\":[\"content/tracks/kerala_hills\"]}]}}"))));
+    var config = api.GetConfigAsync().GetAwaiter().GetResult();
+    AssertEqual("content/tracks/kerala_hills", config.Event!.RequiredContent[0].Targets[0]);
+    AssertEqual("Kerala Hills", api.GetPackageDownloadAsync("7").GetAwaiter().GetResult().Name);
+    // An older SRT without content still works.
+    AssertEqual("0", new EventServerConfig("e", "E", "1.2.3.4", 1, null, null, null).RequiredContent.Count.ToString());
+    AssertEqual("2", IngestMessages.Heartbeat("TTL-01", "1.1.0", 0, false, true, contentMissing: 2)["contentMissing"]!.ToString());
+    AssertTrue(IngestMessages.Heartbeat("TTL-01", "1.1.0", 0, false, true)["contentMissing"] is null);
+}
+
+
+static EventServerConfig Ev(string id, string name = "E") => new(id, name, "1.2.3.4", 8081, null, null, null);
+
+static void ReadsEveryLiveEvent()
+{
+    var api = new RigApiClient(new RigCredential("https://www.simracingtharavadu.in", "TTL-01", "t", "76561198000000000"),
+        new HttpClient(new StubHandler(_ => Json(HttpStatusCode.OK,
+            "{\"rig\":{\"id\":\"TTL-01\",\"displayName\":\"Rig 01\",\"centreId\":\"ttl\",\"centreName\":\"TTL\"}," +
+            "\"events\":[{\"id\":\"krw-r2\",\"name\":\"KRW Round 2\",\"serverHost\":\"15.235.182.31\",\"httpPort\":8027,\"packages\":[]}," +
+            "{\"id\":\"gt3-cup\",\"name\":\"GT3 Cup\",\"serverHost\":\"15.235.182.32\",\"httpPort\":8091,\"serverPassword\":\"gt3\",\"audience\":\"all\"}]," +
+            "\"event\":{\"id\":\"krw-r2\",\"name\":\"KRW Round 2\",\"serverHost\":\"15.235.182.31\",\"httpPort\":8027}}"))));
+    var config = api.GetConfigAsync().GetAwaiter().GetResult();
+    AssertEqual("2", config.LiveEvents.Count.ToString());
+    AssertEqual("gt3", config.FindEvent("GT3-CUP")!.ServerPassword);
+    AssertEqual("all", config.FindEvent("gt3-cup")!.Audience!);
+    AssertEqual("acmanager://race/online/join?httpPort=8091&ip=15.235.182.32", config.FindEvent("gt3-cup")!.ToJoinTarget().ToUri().AbsoluteUri);
+    AssertTrue(config.FindEvent("old-event") is null);
+    AssertTrue(!config.Rig.IsIndividual);
+    // Older SRT: only "event" is sent, and it is the one live event.
+    var older = new RigConfig(new RigInfo("R", "Rig", "c", "C"), Ev("krw"));
+    AssertEqual("krw", older.LiveEvents.Single().Id);
+    AssertEqual("0", new RigConfig(new RigInfo("R", "Rig", "c", "C"), null).LiveEvents.Count.ToString());
+}
+
+static void PicksDefaultEvent()
+{
+    var events = new[] { Ev("new"), Ev("krw", "Kerala Race Wars") };
+    AssertEqual("krw", EventChoice.Default(events, "KRW")!.Id);
+    AssertEqual("new", EventChoice.Default(events, "finished-event")!.Id);
+    AssertEqual("new", EventChoice.Default(events, null)!.Id);
+    AssertTrue(EventChoice.Default(Array.Empty<EventServerConfig>(), "krw") is null);
+    AssertEqual("Kerala Race Wars", EventChoice.Describe(events[1]));
+    AssertEqual("GT3 Cup  —  Spa · Porsche", EventChoice.Describe(new EventServerConfig("g", "GT3 Cup", "1.2.3.4", 1, null, "Spa", "Porsche")));
+}
+
+static void KeepsAppSettings()
+{
+    var folder = Path.Combine(Path.GetTempPath(), "srt-settings-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var store = new AppSettingsStore(Path.Combine(folder, "settings.json"));
+        AssertTrue(store.Load() is null);
+        AssertTrue(!AppSettings.NotSetUp.SetupDone);
+        AssertTrue(AppSettings.Defaults(AppMode.Centre).StartWithWindows);
+        AssertTrue(!AppSettings.Defaults(AppMode.Individual).StartWithWindows);
+        var rig = AppSettings.ForExistingRig(startsWithWindows: true);
+        AssertTrue(rig.SetupDone && rig.AutoUpdate && rig.Mode == AppMode.Centre);
+        store.Save(new AppSettings(true, AppMode.Individual, false, false, "gt3-cup"));
+        var loaded = store.Load()!;
+        AssertEqual("Individual", loaded.Mode.ToString());
+        AssertTrue(!loaded.AutoUpdate && !loaded.StartWithWindows);
+        AssertEqual("gt3-cup", loaded.LastEventId!);
+        AssertTrue(File.ReadAllText(Path.Combine(folder, "settings.json")).Contains("\"Individual\""));
+        File.WriteAllText(Path.Combine(folder, "settings.json"), "{ not json");
+        AssertTrue(store.Load() is null);
+    }
+    finally { if (Directory.Exists(folder)) Directory.Delete(folder, true); }
+}
+
+static void ReadsIndividualRig()
+{
+    var api = new RigApiClient(new RigCredential("https://www.simracingtharavadu.in", "IND-7", "t", "76561198000000000"),
+        new HttpClient(new StubHandler(_ => Json(HttpStatusCode.OK,
+            "{\"rig\":{\"id\":\"IND-7\",\"displayName\":\"Asha's PC\",\"centreId\":\"independent\",\"centreName\":\"Independent drivers\"," +
+            "\"mode\":\"individual\",\"owner\":{\"profileId\":7,\"displayName\":\"Asha K\",\"srtUsername\":\"asha.7\"}},\"events\":[],\"event\":null}"))));
+    var config = api.GetConfigAsync().GetAwaiter().GetResult();
+    AssertTrue(config.Rig.IsIndividual);
+    AssertEqual("Asha K", config.Rig.Owner!.DisplayName);
+    AssertEqual("asha.7", config.Rig.Owner.SrtUsername!);
+    AssertEqual("0", config.LiveEvents.Count.ToString());
+    // Sessions on an individual's PC carry no email sign-in: SRT uses the owner.
+    var session = new ActiveRigSession(Guid.NewGuid(), "@asha.7", "Asha K", "r", "rb", "c", "cb", DateTimeOffset.Now, "gt3-cup", "Asha's PC", null);
+    AssertTrue(IngestMessages.StartSession("IND-7", session)["driverToken"] is null);
+    AssertEqual("gt3-cup", IngestMessages.StartSession("IND-7", session)["eventId"]!.ToString());
+}
+
+static void SignsIndividualUp()
+{
+    var bodies = new List<string>();
+    var http = new HttpClient(new StubHandler(request =>
+    {
+        var body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+        bodies.Add(body);
+        AssertEqual("https://www.simracingtharavadu.in/api/kerala-race-wars-individual", request.RequestUri!.AbsoluteUri);
+        AssertTrue(!request.Headers.Contains("X-Rig-Token"));
+        if (body.Contains("send-code")) return Json(HttpStatusCode.OK, "{\"sent\":true,\"email\":\"as••@example.com\",\"expiresInSeconds\":600,\"resendInSeconds\":60,\"notice\":\"n\"}");
+        if (!body.Contains("displayName")) return Json(HttpStatusCode.OK, "{\"verified\":false,\"needsProfile\":true}");
+        return Json(HttpStatusCode.OK, "{\"verified\":true,\"rigId\":\"IND-200\",\"rigToken\":\"tok\",\"steamId\":\"76561198000000001\",\"movedFromAnotherPc\":false," +
+            "\"driver\":{\"profileId\":200,\"displayName\":\"Asha K\",\"srtUsername\":\"ashak.200\"}}");
+    }));
+    var service = new IndividualSignUpService(http);
+    AssertEqual("as••@example.com", service.SendCodeAsync(" Asha@Example.com ").GetAwaiter().GetResult().Email);
+    AssertTrue(bodies[0].Contains("\"email\":\"asha@example.com\""));
+    var first = service.VerifyAsync("asha@example.com", "123 456", "76561198000000001").GetAwaiter().GetResult();
+    AssertTrue(first.NeedsName && first.Credential is null);
+    var done = service.VerifyAsync("asha@example.com", "123456", "76561198000000001", "Asha K").GetAwaiter().GetResult();
+    AssertEqual("IND-200", done.Credential!.RigId);
+    AssertEqual("tok", done.Credential.RigToken);
+    AssertEqual("76561198000000001", done.Credential.SteamId);
+    AssertEqual("https://www.simracingtharavadu.in", done.Credential.ApiBaseUrl);
+    AssertEqual("Asha K", done.Driver!.DisplayName);
+    AssertTrue(bodies[1].Contains("\"code\":\"123456\"") && bodies[1].Contains("\"steamId\":\"76561198000000001\""));
+    // Steam must be signed in before the code is sent to SRT.
+    AssertThrowsAny(() => service.VerifyAsync("asha@example.com", "123456", null).GetAwaiter().GetResult());
+    AssertEqual("3", bodies.Count.ToString());
+    // SRT's refusal reaches the user as written.
+    var refusing = new IndividualSignUpService(new HttpClient(new StubHandler(_ => Json(HttpStatusCode.Conflict, "{\"error\":\"This Steam account is used by sim centre rig KOC-R01.\"}"))));
+    try { refusing.VerifyAsync("a@example.com", "123456", "76561198000000001").GetAwaiter().GetResult(); throw new InvalidOperationException("Expected refusal."); }
+    catch (RigApiException ex) { AssertEqual("This Steam account is used by sim centre rig KOC-R01.", ex.Message); }
+}
+
+static void RunsDiscordSignIn()
+{
+    var bodies = new List<string>();
+    var polls = 0;
+    var api = new RigApiClient(new RigCredential("https://www.simracingtharavadu.in", "KOC-R01", "rig-key", "76561198000000000"),
+        new HttpClient(new StubHandler(request =>
+        {
+            var body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            bodies.Add(body);
+            AssertEqual("https://www.simracingtharavadu.in/api/kerala-race-wars-discord", request.RequestUri!.AbsoluteUri);
+            AssertEqual("rig-key", request.Headers.GetValues("X-Rig-Token").Single());
+            if (body.Contains("\"start\"")) return Json(HttpStatusCode.OK, "{\"code\":\"ABCD-EFGH-JKMN\",\"url\":\"https://www.simracingtharavadu.in/api/discord-auth?action=login&intent=rig-link&code=ABCDEFGHJKMN\",\"pollToken\":\"poll-1\",\"expiresInSeconds\":600,\"inviteUrl\":\"https://discord.gg/NrsGgCkw32\"}");
+            return ++polls == 1 ? Json(HttpStatusCode.OK, "{\"status\":\"pending\"}")
+                : Json(HttpStatusCode.OK, "{\"status\":\"done\",\"outcome\":\"signed-in\",\"discordUsername\":\"nikhil.joji\",\"inGuild\":false," +
+                    "\"driverToken\":\"drv-1\",\"driver\":{\"profileId\":7,\"displayName\":\"Nikhil Joji\",\"srtUsername\":\"nikhil\",\"discordUsername\":\"nikhil.joji\"}}");
+        })));
+    var start = api.StartDiscordAsync("sign-in").GetAwaiter().GetResult();
+    AssertEqual("ABCD-EFGH-JKMN", start.Code);
+    AssertTrue(bodies[0].Contains("\"purpose\":\"sign-in\"") && bodies[0].Contains("\"rigId\":\"KOC-R01\"") && !bodies[0].Contains("driverToken"));
+    var first = api.PollDiscordAsync(start.PollToken).GetAwaiter().GetResult();
+    AssertTrue(!first.IsFinished);
+    var done = api.PollDiscordAsync(start.PollToken).GetAwaiter().GetResult();
+    AssertTrue(done.IsDone && done.InGuild == false);
+    AssertEqual("drv-1", done.DriverToken!);
+    AssertEqual("nikhil.joji", done.Driver!.DiscordUsername!);
+    api.StartDiscordAsync("link", "drv-9").GetAwaiter().GetResult();
+    AssertTrue(bodies[3].Contains("\"purpose\":\"link\"") && bodies[3].Contains("\"driverToken\":\"drv-9\""));
+
+    // Own PC set up with Discord: the finished result becomes this PC's SRT sign-in.
+    var service = new IndividualSignUpService(new HttpClient(new StubHandler(_ => Json(HttpStatusCode.OK, "{}"))));
+    var credential = service.CredentialFrom(new DiscordLinkPoll("done", RigId: "IND-7", RigToken: "tok", SteamId: "76561198000000001"));
+    AssertEqual("IND-7", credential.RigId);
+    AssertThrowsAny(() => service.CredentialFrom(new DiscordLinkPoll("done", RigId: "IND-7", RigToken: "tok", SteamId: null)));
+    AssertThrowsAny(() => service.StartDiscordAsync(null).GetAwaiter().GetResult());
+    // The owner of an individual's PC carries their linked Discord.
+    AssertEqual("asha.k", System.Text.Json.JsonSerializer.Deserialize<RigOwner>("{\"profileId\":7,\"displayName\":\"Asha\",\"srtUsername\":\"asha\",\"discordUsername\":\"asha.k\"}",
+        new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!.DiscordUsername!);
+}
+
 sealed class RaceIniFixture : IDisposable
 {
     private readonly string _directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"srt-companion-tests-{Guid.NewGuid():N}");
@@ -919,4 +1235,11 @@ static class CmValues
         var line = System.Text.Encoding.UTF8.GetString(result.ToArray()).Split('\n').FirstOrDefault(l => l.StartsWith(Key + "\t", StringComparison.Ordinal));
         return line?[(Key.Length + 1)..];
     }
+}
+
+sealed class SyncProgress<T> : IProgress<T>
+{
+    private readonly Action<T> _report;
+    public SyncProgress(Action<T> report) => _report = report;
+    public void Report(T value) => _report(value);
 }

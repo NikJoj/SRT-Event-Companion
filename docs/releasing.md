@@ -16,9 +16,14 @@ The script runs the tests, publishes a self-contained build (rigs don't need .NE
 
 ## First install on a rig
 
-Copy the setup file to the rig and run it. No admin rights are needed. It installs to
-`%LOCALAPPDATA%\Programs\SRT Event Companion` with a Start menu shortcut, an optional desktop shortcut and
-**Start with Windows** (ticked by default). Then open the app and pair the rig as usual.
+Copy the setup file to the PC and run it. No admin rights are needed. It installs to
+`%LOCALAPPDATA%\Programs\SRT Event Companion` with a Start menu shortcut and an optional desktop shortcut.
+On first launch the app asks **At a sim centre** or **On my own PC**, plus **Start with Windows** and
+**Install updates automatically** (both can be changed later in Settings). A sim centre then pairs the rig with a code;
+an individual signs in with their email or linked Discord.
+
+Rigs updated from 1.0.x skip that question: they stay a sim centre rig with automatic updates, and keep starting with
+Windows if the old installer set that up.
 
 Only one copy runs at a time: opening it again brings the running window to the front.
 
@@ -28,10 +33,10 @@ Only one copy runs at a time: opening it again brings the running window to the 
 2. Upload the setup file to a public https address (for example a GitHub release on a public repository).
 3. Admin → Kerala Race Wars → **Companion app release** → **Publish new version**: version, download link, SHA-256.
 
-Each rig checks at start-up and after every End Session (there is no background polling, so the free database can
+Each PC checks at start-up and after every End Session (there is no background polling, so the free database can
 sleep while rigs are idle). It installs on its own only when nobody is using it (on the rig-check screen, or between
 drivers). Otherwise staff see **Update to vX** in the header. To push an update to an idle rig, restart the app.
-It never updates during a session. The download is refused unless its SHA-256 matches what you published.
+It never updates during a session. A PC with automatic updates turned off in Settings only shows the button. The download is refused unless its SHA-256 matches what you published.
 The Rigs table in admin shows each rig's version and **Update pending** until it has updated.
 
 **Withdraw** stops rigs that haven't updated from installing it. To roll back, publish the old build with a

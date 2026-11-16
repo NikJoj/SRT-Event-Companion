@@ -1,0 +1,37 @@
+<Window x:Class="Srt.EventCompanion.Desktop.ContentWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Event content · SRT Event Companion" Icon="pack://application:,,,/Assets/app.ico"
+        Width="640" SizeToContent="Height" MaxHeight="720" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        Background="{StaticResource Bg2}" Foreground="{StaticResource Text}" FontFamily="{StaticResource BodyFont}"
+        TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
+  <Grid>
+    <Border Style="{StaticResource CardAccent}"/>
+    <StackPanel Margin="32,30,32,28">
+      <TextBlock x:Name="EventLabel" Text="EVENT CONTENT" Style="{StaticResource Kicker}"/>
+      <TextBlock Text="SET UP EVENT CONTENT" Style="{StaticResource StepHeading}" FontSize="36"/>
+      <TextBlock x:Name="IntroText" Style="{StaticResource Hint}" Margin="0,0,0,18" TextWrapping="Wrap"
+                 Text="This event needs these mods on this PC. Install what's missing, or skip a package that's already installed."/>
+
+      <!-- One row per required package: name, size, status, and a Skip button when it isn't ready -->
+      <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto">
+        <StackPanel x:Name="PackageList"/>
+      </ScrollViewer>
+
+      <!-- Progress while installing -->
+      <StackPanel x:Name="ProgressPanel" Visibility="Collapsed" Margin="0,18,0,0">
+        <TextBlock x:Name="ProgressText" Style="{StaticResource Hint}" Margin="0,0,0,6"/>
+        <ProgressBar x:Name="ProgressBar" Height="8" Minimum="0" Maximum="1" Foreground="{StaticResource Red}"
+                     Background="{StaticResource FieldBg}" BorderThickness="0"/>
+      </StackPanel>
+
+      <TextBlock x:Name="ErrorText" Style="{StaticResource ErrorText}" Visibility="Collapsed" Margin="0,14,0,0" TextWrapping="Wrap"/>
+      <TextBlock x:Name="DoneText" Style="{StaticResource Hint}" Visibility="Collapsed" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="#3DDC84"/>
+
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
+        <Button x:Name="CloseBtn" Content="CLOSE" Style="{StaticResource SecondaryBtn}" Click="Close_Click" Margin="0,0,8,0"/>
+        <Button x:Name="InstallBtn" Content="INSTALL MISSING" Style="{StaticResource PrimaryBtn}" Click="Install_Click"/>
+      </StackPanel>
+    </StackPanel>
+  </Grid>
+</Window>
