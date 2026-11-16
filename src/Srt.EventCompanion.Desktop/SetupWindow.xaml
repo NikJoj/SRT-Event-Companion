@@ -1,9 +1,8 @@
-<Window x:Class="Srt.EventCompanion.Desktop.SetupWindow"
+<local:PageView x:Class="Srt.EventCompanion.Desktop.SetupWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Set up · SRT Event Companion" Icon="pack://application:,,,/Assets/app.ico"
-        Width="640" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
-        Background="{StaticResource Bg2}" Foreground="{StaticResource Text}" FontFamily="{StaticResource BodyFont}"
+        xmlns:local="clr-namespace:Srt.EventCompanion.Desktop"
+        Width="640" Background="{StaticResource Bg2}" Foreground="{StaticResource Text}" FontFamily="{StaticResource BodyFont}"
         TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
   <Grid>
     <Border Style="{StaticResource CardAccent}"/>
@@ -67,7 +66,7 @@
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
         <TextBlock Style="{StaticResource Hint}" VerticalAlignment="Center"
-                   Text="Already linked your Discord to SRT? Sign in with it instead. New to SRT or not linked yet? Use your email first; you can link Discord next."/>
+                   Text="Or sign in with Discord instead of email. Raced with SRT on Discord before? You get your existing profile."/>
         <Button Grid.Column="1" Content="SIGN IN WITH DISCORD" Style="{StaticResource SecondaryBtn}" Margin="12,0,0,0" Click="DiscordSignIn_Click"/>
       </Grid>
 
@@ -103,4 +102,4 @@
       </StackPanel>
     </StackPanel>
   </Grid>
-</Window>
+</local:PageView>

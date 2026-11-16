@@ -4,7 +4,7 @@ using Srt.EventCompanion.Core;
 namespace Srt.EventCompanion.Desktop;
 
 /// <summary>Change the choices made in first-run setup: how this PC is used, start with Windows, automatic updates.</summary>
-public partial class SettingsWindow : Window
+public partial class SettingsWindow : PageView
 {
     private readonly AppSettingsStore _store;
     private AppSettings _settings;
@@ -45,13 +45,13 @@ public partial class SettingsWindow : Window
         LinkDiscordBtn.Visibility = discordUsername is null ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void LinkDiscord_Click(object sender, RoutedEventArgs e)
+    private async void LinkDiscord_Click(object sender, RoutedEventArgs e)
     {
         if (_api is not { } api) return;
         var window = new DiscordWindow("LINK DISCORD",
             "Links your Discord to your SRT driver profile. If you already raced with SRT using Discord, your history comes together on one profile.",
-            () => api.StartDiscordAsync("link"), poll => api.PollDiscordAsync(poll), sharedPc: false) { Owner = this };
-        window.ShowDialog();
+            () => api.StartDiscordAsync("link"), poll => api.PollDiscordAsync(poll), sharedPc: false);
+        await Navigator!.ShowAsync(window);
         if (window.Result is not { } result) return;
         DiscordChanged = true;
         if (result.Outcome == "pending-review")
@@ -76,7 +76,7 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private void ChangeMode_Click(object sender, RoutedEventArgs e)
+    private async void ChangeMode_Click(object sender, RoutedEventArgs e)
     {
         if (_sessionActive)
         {
@@ -84,12 +84,14 @@ public partial class SettingsWindow : Window
             return;
         }
         var setup = new SetupWindow(_store, _settings with { StartWithWindows = StartWithWindowsBox.IsChecked == true, AutoUpdate = AutoUpdateBox.IsChecked == true },
-            changingMode: true) { Owner = this };
-        if (setup.ShowDialog() != true || setup.Result is null) return;
+            changingMode: true);
+        if (!await Navigator!.ShowAsync(setup) || setup.Result is null) return;
         _settings = setup.Result;
         ModeChanged = true;
-        DialogResult = true;
+        Close(true);
     }
+
+    private void Cancel_Click(object sender, RoutedEventArgs e) => Close(false);
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
@@ -101,7 +103,7 @@ public partial class SettingsWindow : Window
         }
         _settings = _settings with { StartWithWindows = startWithWindows, AutoUpdate = AutoUpdateBox.IsChecked == true };
         _store.Save(_settings);
-        DialogResult = true;
+        Close(true);
     }
 
     private void ShowError(string message)

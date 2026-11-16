@@ -9,7 +9,7 @@ using Srt.EventCompanion.Core;
 
 namespace Srt.EventCompanion.Desktop;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, IPageNavigator
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
 
@@ -78,7 +78,22 @@ public partial class MainWindow : Window
         _settings = settings;
         _contentInstaller = new ContentInstaller(store: _contentStore);
         InitializeComponent();
-        Loaded += (_, _) => RunInitChecks();
+        Loaded += async (_, _) =>
+        {
+            // First run: how this PC is used, inside this window. Nothing else happens until it's done.
+            if (!_settings.SetupDone)
+            {
+                var setup = new SetupWindow(_settingsStore, _settings);
+                await ShowAsync(setup);
+                if (setup.Result is not null) _settings = setup.Result;
+            }
+            RunInitChecks();
+        };
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape && _pages.Count > 0) { _pages[^1].RequestBack(); e.Handled = true; }
+        };
+        Closing += (_, e) => { if (_pages.Any(page => !page.CanAppClose())) e.Cancel = true; };
         _syncTimer.Tick += async (_, _) => await SyncTickAsync();
         _lapTimer.Tick += (_, _) => LapTick();
         _resendTimer.Tick += (_, _) => UpdateResendButton();
@@ -88,6 +103,34 @@ public partial class MainWindow : Window
             .FirstOrDefault(a => a.Key == "BuildDate")?.Value;
         VersionText.Text = built is null ? $"V{AppVersion.Current}" : $"V{AppVersion.Current}  ·  built {built}";
         Closed += (_, _) => StopLapRecording(flush: false);
+    }
+
+    // ── Pages (instead of separate windows) ──────────────────────────────────
+
+    private readonly List<PageView> _pages = new();
+
+    /// <summary>Shows a page over the current step; the page underneath comes back when it closes.</summary>
+    public async Task<bool> ShowAsync(PageView page)
+    {
+        var closed = page.Attach(this);
+        _pages.Add(page);
+        ShowTopPage();
+        try { return await closed; }
+        finally
+        {
+            _pages.Remove(page);
+            ShowTopPage();
+        }
+    }
+
+    private void ShowTopPage()
+    {
+        var top = _pages.Count == 0 ? null : _pages[^1];
+        PageContent.Content = top;
+        PageHost.Visibility = top is null ? Visibility.Collapsed : Visibility.Visible;
+        SettingsBtn.IsEnabled = top is null;
+        if (top is not null)
+            Dispatcher.BeginInvoke(() => top.MoveFocus(new TraversalRequest(FocusNavigationDirection.First)), DispatcherPriority.Input);
     }
 
     // ── STEP 1: INITIALISATION ───────────────────────────────────────────────
@@ -162,16 +205,25 @@ public partial class MainWindow : Window
         }
 
         _pcReady = _credential is not null && _acPaths is not null && steamMatches;
-        UpdateInitButtons();
+        SelectEvent(_selectedEvent); // re-checks the event's mods now that Assetto Corsa's folder is known
     }
 
     private bool _pcReady;
 
-    /// <summary>Continue needs a ready PC and a chosen event; Prepare needs the event and Assetto Corsa.</summary>
+    /// <summary>
+    /// Prepare needs the event and Assetto Corsa; it turns green once every mod the event needs is installed (or skipped).
+    /// Continue needs a ready PC, a chosen event, and Prepare green.
+    /// </summary>
     private void UpdateInitButtons()
     {
-        ProceedBtn.IsEnabled = _pcReady && _selectedEvent is not null;
+        var contentReady = _selectedEvent is not null && _contentMissing == 0;
         PrepareBtn.IsEnabled = _credential is not null && _acPaths is not null && _selectedEvent is not null;
+        PrepareBtn.Style = (Style)FindResource(contentReady ? "ReadyBtn" : "PrimaryBtn");
+        PrepareBtn.Content = contentReady
+            ? (_selectedEvent!.RequiredContent.Count == 0 ? "✓ NO MODS NEEDED" : "✓ EVENT MODS READY")
+            : _contentMissing is > 0 ? $"PREPARE FOR EVENT ({_contentMissing} MOD{(_contentMissing == 1 ? "" : "S")})" : "PREPARE FOR EVENT";
+        ProceedBtn.IsEnabled = _pcReady && contentReady;
+        PrepareHint.Visibility = _selectedEvent is not null && _acPaths is not null && !contentReady ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // ── Event choice ─────────────────────────────────────────────────────────
@@ -262,9 +314,10 @@ public partial class MainWindow : Window
             _settings = _settings with { LastEventId = evt.Id };
             try { _settingsStore.Save(_settings); } catch (IOException) { /* only the default choice next time */ }
         }
-        // Mods missing for this event, for the next check-in (a quick look at the folders, no download).
-        if (evt is not null && _acPaths is not null)
-            _contentMissing = ContentWindow.CountNotReady(ContentChecker.CheckAll(evt.RequiredContent, _acPaths.InstallDirectory, _contentStore));
+        // Mods missing for this event (a quick look at the folders, no download): Continue waits until there are none.
+        _contentMissing = evt is not null && _acPaths is not null
+            ? ContentWindow.CountNotReady(ContentChecker.CheckAll(evt.RequiredContent, _acPaths.InstallDirectory, _contentStore))
+            : null;
         UpdateInitButtons();
     }
 
@@ -294,8 +347,8 @@ public partial class MainWindow : Window
     {
         var who = _credential is null ? null : IsIndividual ? _owner?.DisplayName ?? "your account" : _credential.RigId;
         var window = new SettingsWindow(_settingsStore, _settings, who, sessionActive: _activeSessionStore.Load() is not null,
-            api: IsIndividual ? _api : null, discordUsername: _owner?.DiscordUsername) { Owner = this };
-        var saved = window.ShowDialog() == true;
+            api: IsIndividual ? _api : null, discordUsername: _owner?.DiscordUsername);
+        var saved = await ShowAsync(window);
         if (window.DiscordChanged && !window.ModeChanged)
         {
             await LoadEventsAsync();
@@ -341,23 +394,24 @@ public partial class MainWindow : Window
                 SetError(InitError, $"{_selectedEvent.Name} is no longer live. Choose another event.");
                 return;
             }
+            _selectedEvent = evt; // admins may have changed its mods
             if (evt.RequiredContent.Count == 0)
             {
                 _contentMissing = 0;
                 MessageBox.Show(this, $"{evt.Name} doesn't need any extra mods. This PC is ready.", "Prepare for event", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
-            EnsureEventContent(evt, alwaysShow: true);
+            await EnsureEventContentAsync(evt, alwaysShow: true);
         }
         catch (Exception ex) { SetError(InitError, ex is RigApiException { StatusCode: null } ? "SRT could not be reached. Check the internet connection." : ex.Message); }
-        finally { PrepareBtn.IsEnabled = true; _ = SendHeartbeatAsync(); }
+        finally { UpdateInitButtons(); _ = SendHeartbeatAsync(); }
     }
 
     /// <summary>
     /// True when every package the event requires is installed or skipped. Otherwise opens the content window
     /// (install, or skip what the rig already has) and returns whether everything is ready afterwards.
     /// </summary>
-    private bool EnsureEventContent(EventServerConfig evt, bool alwaysShow = false)
+    private async Task<bool> EnsureEventContentAsync(EventServerConfig evt, bool alwaysShow = false)
     {
         if (_api is null) return true;
         var paths = RequirePaths();
@@ -365,8 +419,7 @@ public partial class MainWindow : Window
         _contentMissing = ContentWindow.CountNotReady(checks);
         if (_contentMissing == 0 && !alwaysShow) return true;
 
-        var window = new ContentWindow(evt, _api, paths, _contentInstaller, _contentStore, _gameProcesses) { Owner = this };
-        window.ShowDialog();
+        await ShowAsync(new ContentWindow(evt, _api, paths, _contentInstaller, _contentStore, _gameProcesses));
         _contentMissing = ContentWindow.CountNotReady(ContentChecker.CheckAll(evt.RequiredContent, paths.InstallDirectory, _contentStore));
         return _contentMissing == 0;
     }
@@ -440,16 +493,16 @@ public partial class MainWindow : Window
         AcPickError.Visibility = Visibility.Visible;
     }
 
-    private void PairRig_Click(object sender, RoutedEventArgs e)
+    private async void PairRig_Click(object sender, RoutedEventArgs e)
     {
         if (IsIndividual)
         {
             // Sign in again with email (a new PC, or signed out because the account moved to another PC).
-            var setup = new SetupWindow(_settingsStore, _settings, changingMode: true) { Owner = this };
-            if (setup.ShowDialog() == true && setup.Result is not null) _settings = setup.Result;
+            var setup = new SetupWindow(_settingsStore, _settings, changingMode: true);
+            if (await ShowAsync(setup) && setup.Result is not null) _settings = setup.Result;
             _owner = null;
         }
-        else new PairRigWindow { Owner = this }.ShowDialog();
+        else await ShowAsync(new PairRigWindow());
         _eventsLoaded = false;
         Recheck();
     }
@@ -532,14 +585,14 @@ public partial class MainWindow : Window
         }
     }
 
-    private void DiscordSignIn_Click(object sender, RoutedEventArgs e)
+    private async void DiscordSignIn_Click(object sender, RoutedEventArgs e)
     {
         DriverError.Visibility = Visibility.Collapsed;
         if (_api is not { } api) { SetError(DriverError, "This rig is not paired with SRT."); return; }
         var window = new DiscordWindow("SIGN IN WITH DISCORD",
-            "For drivers who already linked Discord to SRT. Scan the code with your phone and sign in to Discord there.",
-            () => api.StartDiscordAsync("sign-in"), poll => api.PollDiscordAsync(poll), sharedPc: true) { Owner = this };
-        window.ShowDialog();
+            "Scan the code with your phone and sign in to Discord there. SRT drivers get their existing profile; new drivers get one made from their Discord.",
+            () => api.StartDiscordAsync("sign-in"), poll => api.PollDiscordAsync(poll), sharedPc: true);
+        await ShowAsync(window);
         if (window.Result is not { DriverToken: { } token, Driver: { } driver } result) return;
 
         _driverEmail = null;
@@ -574,8 +627,8 @@ public partial class MainWindow : Window
         }
         var window = new DiscordWindow("LINK DISCORD",
             "Optional. Links the driver's Discord to their SRT profile, so they can sign in with Discord next time and their SRT races show up together.",
-            () => api.StartDiscordAsync("link", token), poll => api.PollDiscordAsync(poll), sharedPc: !IsIndividual) { Owner = this };
-        window.ShowDialog();
+            () => api.StartDiscordAsync("link", token), poll => api.PollDiscordAsync(poll), sharedPc: !IsIndividual);
+        await ShowAsync(window);
         if (window.Result is not { } result) return;
         var linkedName = result.Outcome == "linked" ? result.DiscordUsername : null;
         if (IsIndividual && _owner is { } owner)
@@ -779,7 +832,7 @@ public partial class MainWindow : Window
             }
             _event = evt;
             // The event's mods must be on the PC (installed by the app, or skipped) before the driver can join.
-            if (!EnsureEventContent(evt))
+            if (!await EnsureEventContentAsync(evt))
                 throw new InvalidOperationException("This event's mods are not all on this PC yet. Select Preview again to install them, or skip the ones already installed.");
 
             _preparation = BuildPreparation(_config.Rig, evt, SrtUsername.Display(username), displayName);
@@ -894,7 +947,7 @@ public partial class MainWindow : Window
                     if (latest.FindEvent(evt.Id) is not { } latestEvent)
                         throw new InvalidOperationException($"{evt.Name} is no longer live. Select Edit driver, then Back, and choose another event.");
                     // Admins may have changed the server or added required content since the preview.
-                    if (!EnsureEventContent(latestEvent))
+                    if (!await EnsureEventContentAsync(latestEvent))
                         throw new InvalidOperationException("This event's mods are not all on this PC yet. Install them, or skip the ones already installed, then launch again.");
                     evt = _event = latestEvent;
                 }

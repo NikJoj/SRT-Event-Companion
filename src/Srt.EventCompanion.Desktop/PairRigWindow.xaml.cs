@@ -4,7 +4,7 @@ using Srt.EventCompanion.Core;
 
 namespace Srt.EventCompanion.Desktop;
 
-public partial class PairRigWindow : Window
+public partial class PairRigWindow : PageView
 {
     public PairRigWindow()
     {
@@ -40,7 +40,7 @@ public partial class PairRigWindow : Window
             ShowStatus($"✓ Paired as {credential.RigId}. Closing…");
             PairButton.Content = "PAIRED ✓";
             await Task.Delay(900);
-            DialogResult = true;
+            Close(true);
         }
         catch (PairingException exception)
         {
@@ -69,6 +69,8 @@ public partial class PairRigWindow : Window
         CodeInput.Focus();
         CodeInput.SelectAll();
     }
+
+    private void Back_Click(object sender, RoutedEventArgs e) => Close(false);
 
     private void ShowStatus(string message)
     {

@@ -9,7 +9,7 @@ namespace Srt.EventCompanion.Desktop;
 /// their email, which registers this PC with SRT; a sim centre pairs the rig with a code (now or later).
 /// Also opened from Settings to change how this PC is used: nothing changes unless the new registration succeeds.
 /// </summary>
-public partial class SetupWindow : Window
+public partial class SetupWindow : PageView
 {
     private readonly AppSettingsStore _settingsStore;
     private readonly AppSettings _current;
@@ -30,8 +30,6 @@ public partial class SetupWindow : Window
         {
             ModeKicker.Text = "SETTINGS";
             CancelBtn.Visibility = Visibility.Visible;
-            Title = "Change how this PC is used · SRT Event Companion";
-            WindowStartupLocation = WindowStartupLocation.CenterOwner;
             (current.Mode == AppMode.Individual ? IndividualChoice : CentreChoice).IsChecked = true;
         }
     }
@@ -49,9 +47,18 @@ public partial class SetupWindow : Window
         if (!_changingMode) StartWithWindowsBox.IsChecked = AppSettings.Defaults(SelectedMode).StartWithWindows;
     }
 
-    private void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;
+    private void Cancel_Click(object sender, RoutedEventArgs e) => Close(false);
 
-    private void Continue_Click(object sender, RoutedEventArgs e)
+    /// <summary>Esc: back a page; on first run there is nothing to go back to.</summary>
+    public override bool RequestBack()
+    {
+        if (SignUpPage.Visibility == Visibility.Visible) { Back_Click(this, new RoutedEventArgs()); return true; }
+        if (LinkPage.Visibility == Visibility.Visible) { Finish(AppMode.Individual); return true; }
+        if (_changingMode) { Close(false); return true; }
+        return false;
+    }
+
+    private async void Continue_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedMode == AppMode.Individual)
         {
@@ -62,7 +69,7 @@ public partial class SetupWindow : Window
         }
 
         // Sim centre: pair now. On first run the rig can also be paired later from the main screen.
-        var paired = new PairRigWindow { Owner = this }.ShowDialog() == true;
+        var paired = await Navigator!.ShowAsync(new PairRigWindow());
         if (!paired && _changingMode)
         {
             ModeError.Text = "This PC stays as it was. Pair it with a code from SRT admin to switch it to a sim centre rig.";
@@ -153,28 +160,28 @@ public partial class SetupWindow : Window
     private RigCredential? _credential;
 
     /// <summary>Own PC with a Discord account already linked to an SRT driver: no email needed.</summary>
-    private void DiscordSignIn_Click(object sender, RoutedEventArgs e)
+    private async void DiscordSignIn_Click(object sender, RoutedEventArgs e)
     {
         SignUpError.Visibility = Visibility.Collapsed;
         var steamId = SteamAccount.SignedInSteamId();
         var window = new DiscordWindow("SIGN IN WITH DISCORD",
-            "For drivers who already linked Discord to SRT. Scan the code with your phone, or open it in this PC's browser.",
-            () => _signUp.StartDiscordAsync(steamId), poll => _signUp.PollDiscordAsync(poll), sharedPc: false) { Owner = this };
-        window.ShowDialog();
+            "Scan the code with your phone, or open it in this PC's browser, and sign in to Discord. SRT drivers get their existing profile; new drivers get one made from their Discord.",
+            () => _signUp.StartDiscordAsync(steamId), poll => _signUp.PollDiscordAsync(poll), sharedPc: false);
+        await Navigator!.ShowAsync(window);
         if (window.Result is not { } result) return;
         try { new RigCredentialStore().Save(_signUp.CredentialFrom(result)); }
         catch (Exception ex) { ShowError($"Signed in, but the app could not save your sign-in ({ex.Message}). Try again."); return; }
         Finish(AppMode.Individual);
     }
 
-    private void LinkDiscord_Click(object sender, RoutedEventArgs e)
+    private async void LinkDiscord_Click(object sender, RoutedEventArgs e)
     {
         if (_credential is null) { Finish(AppMode.Individual); return; }
         var api = new RigApiClient(_credential);
         var window = new DiscordWindow("LINK DISCORD",
             "Scan the code with your phone, or open it in this PC's browser, and sign in to Discord.",
-            () => api.StartDiscordAsync("link"), poll => api.PollDiscordAsync(poll), sharedPc: false) { Owner = this };
-        window.ShowDialog();
+            () => api.StartDiscordAsync("link"), poll => api.PollDiscordAsync(poll), sharedPc: false);
+        await Navigator!.ShowAsync(window);
         Finish(AppMode.Individual);
     }
 
@@ -190,7 +197,7 @@ public partial class SetupWindow : Window
         StartupRegistration.Set(settings.StartWithWindows);
         _settingsStore.Save(settings);
         Result = settings;
-        DialogResult = true;
+        Close(true);
     }
 
     private void ShowError(string message)

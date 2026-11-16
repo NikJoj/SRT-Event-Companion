@@ -12,7 +12,7 @@ namespace Srt.EventCompanion.Desktop;
 /// Discord sign-in without Discord on this PC: SRT gives a short code, shown here as a QR code. The driver signs in to
 /// Discord on their phone (or in this PC's browser) and this window polls SRT until that is done.
 /// </summary>
-public partial class DiscordWindow : Window
+public partial class DiscordWindow : PageView
 {
     private readonly Func<Task<DiscordLinkStart>> _start;
     private readonly Func<string, Task<DiscordLinkPoll>> _poll;
@@ -20,6 +20,7 @@ public partial class DiscordWindow : Window
     private DiscordLinkStart? _link;
     private DateTimeOffset _expiresAt;
     private bool _polling;
+    private bool _started;
     private string _inviteUrl = "https://discord.gg/NrsGgCkw32";
 
     /// <param name="sharedPc">A sim centre rig: suggest the phone, and signing out if the browser here is used.</param>
@@ -32,8 +33,9 @@ public partial class DiscordWindow : Window
         IntroText.Text = intro;
         SharedPcHint.Visibility = sharedPc ? Visibility.Visible : Visibility.Collapsed;
         _timer.Tick += async (_, _) => await PollAsync();
-        Loaded += async (_, _) => await StartAsync();
-        Closed += (_, _) => _timer.Stop();
+        Loaded += async (_, _) => { if (_link is null && !_started) { _started = true; await StartAsync(); } };
+        PageClosed += (_, _) => _timer.Stop();
+        Unloaded += (_, _) => _timer.Stop();
     }
 
     /// <summary>The finished result (Status done), or null if the window was closed first.</summary>
@@ -51,7 +53,6 @@ public partial class DiscordWindow : Window
             _link = await _start();
             if (!string.IsNullOrWhiteSpace(_link.InviteUrl)) _inviteUrl = _link.InviteUrl!;
             _expiresAt = DateTimeOffset.Now.AddSeconds(Math.Max(60, _link.ExpiresInSeconds));
-            CodeText.Text = _link.Code;
             QrImage.Source = QrCode(_link.Url);
             StatusText.Text = $"Waiting for Discord… The code works for {Math.Max(1, _link.ExpiresInSeconds / 60)} minutes.";
             _timer.Start();
@@ -89,7 +90,10 @@ public partial class DiscordWindow : Window
         {
             "pending-review" => ("✓ ALMOST THERE",
                 $"{who} matches an existing SRT driver profile. An SRT admin will confirm it's you, then your email and that profile become one. You can race now."),
-            "signed-in" => ($"✓ SIGNED IN AS {status.Driver?.DisplayName?.ToUpperInvariant() ?? who.ToUpperInvariant()}", $"With Discord {who}."),
+            "signed-in" => ($"✓ SIGNED IN AS {status.Driver?.DisplayName?.ToUpperInvariant() ?? who.ToUpperInvariant()}",
+                status.PendingReview == true
+                    ? $"With Discord {who}. It matches an SRT driver profile an admin made; once an admin confirms it's you, your races come together on that profile."
+                    : status.NewProfile == true ? $"With Discord {who}. Welcome to SRT: your driver profile was just created." : $"With Discord {who}."),
             _ => ("✓ DISCORD LINKED", status.Merged == true
                 ? $"{who} is linked. Your email and your existing SRT driver profile ({status.Driver?.DisplayName}) are now one profile."
                 : $"{who} is linked to {status.Driver?.DisplayName ?? "your SRT driver profile"}. Next time you can sign in with Discord.")
@@ -141,5 +145,7 @@ public partial class DiscordWindow : Window
 
     private async void Retry_Click(object sender, RoutedEventArgs e) => await StartAsync();
 
-    private void Close_Click(object sender, RoutedEventArgs e) => DialogResult = Result is not null;
+    private void Close_Click(object sender, RoutedEventArgs e) => Close(Result is not null);
+
+    public override bool RequestBack() { Close(Result is not null); return true; }
 }

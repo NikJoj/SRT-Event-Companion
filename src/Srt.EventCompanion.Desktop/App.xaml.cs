@@ -65,16 +65,8 @@ public partial class App : Application
                 settingsStore.Save(settings);
             }
         }
-        if (settings is not { SetupDone: true })
-        {
-            ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            var setup = new SetupWindow(settingsStore, settings ?? Srt.EventCompanion.Core.AppSettings.NotSetUp);
-            if (setup.ShowDialog() != true || setup.Result is null) { Shutdown(); return; }
-            settings = setup.Result;
-            ShutdownMode = ShutdownMode.OnMainWindowClose;
-        }
-
-        var window = new MainWindow(settingsStore, settings);
+        // Not set up yet: the main window opens on the setup page.
+        var window = new MainWindow(settingsStore, settings ?? Srt.EventCompanion.Core.AppSettings.NotSetUp);
         MainWindow = window;
         window.Show();
     }

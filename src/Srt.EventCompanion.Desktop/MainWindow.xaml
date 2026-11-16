@@ -162,10 +162,12 @@
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,6,0,0">
             <Button Content="CHECK AGAIN" Style="{StaticResource SecondaryBtn}" Click="CheckAgain_Click" Margin="0,0,8,0"/>
             <Button x:Name="PairBtn" Content="PAIR THIS RIG" Style="{StaticResource SecondaryBtn}" Click="PairRig_Click" Margin="0,0,8,0"/>
-            <Button x:Name="PrepareBtn" Content="PREPARE FOR EVENT" Style="{StaticResource SecondaryBtn}" Click="PrepareForEvent_Click" Margin="0,0,8,0"
-                    ToolTip="Install the chosen event's mods now, before the session." IsEnabled="False"/>
+            <Button x:Name="PrepareBtn" Content="PREPARE FOR EVENT" Style="{StaticResource PrimaryBtn}" Click="PrepareForEvent_Click" Margin="0,0,8,0"
+                    ToolTip="Install the chosen event's mods on this PC." IsEnabled="False"/>
             <Button x:Name="ProceedBtn" Content="CONTINUE  →" Style="{StaticResource PrimaryBtn}" Click="Proceed_Click" IsEnabled="False"/>
           </StackPanel>
+          <TextBlock x:Name="PrepareHint" Style="{StaticResource Hint}" HorizontalAlignment="Right" TextAlignment="Right" Margin="0,8,0,0" Visibility="Collapsed"
+                     Text="Select Prepare for event to install this event's mods. Continue unlocks when it turns green."/>
         </StackPanel>
         </ScrollViewer>
       </Grid>
@@ -209,7 +211,7 @@
                     <ColumnDefinition Width="Auto"/>
                   </Grid.ColumnDefinitions>
                   <TextBlock Style="{StaticResource Hint}" VerticalAlignment="Center"
-                             Text="Already linked Discord to SRT? Sign in with it instead: the driver scans a QR code with their phone."/>
+                             Text="Or sign in with Discord: the driver scans a QR code with their phone. Any Discord account works; new drivers get an SRT profile."/>
                   <Button x:Name="DiscordSignInBtn" Grid.Column="1" Content="SIGN IN WITH DISCORD" Style="{StaticResource SecondaryBtn}"
                           Margin="12,0,0,0" Click="DiscordSignIn_Click"/>
                 </Grid>
@@ -289,7 +291,7 @@
               <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="4.  Optional: Link Discord. Next time the driver can sign in with Discord instead of waiting for an email."/>
               <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="5.  Preview, then Launch. Each sign-in is good for one session."/>
               <TextBlock Style="{StaticResource Hint}" Margin="0,18,0,0"
-                         Text="Discord already linked? Select Sign in with Discord and let the driver scan the QR code with their phone. Discord that isn't linked yet: sign in with email first, then Link Discord."/>
+                         Text="Prefer Discord? Select Sign in with Discord and let the driver scan the QR code with their phone. SRT drivers who signed in on the website with Discord get their existing profile."/>
               <TextBlock Style="{StaticResource Hint}" Margin="0,18,0,0"
                          Text="No email? Check the spam and promotions folders, wait a minute, then select Resend. Five wrong codes means sending a new one."/>
             </StackPanel>
@@ -392,6 +394,16 @@
           </Border>
           <Border Style="{StaticResource CardAccent}"/>
         </Grid>
+      </Grid>
+
+      <!-- ── PAGES: setup, settings, pairing, Discord and event mods open here, over the current step (Esc goes back) ── -->
+      <Grid x:Name="PageHost" Visibility="Collapsed" Background="#F2080A0C">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <Border Background="{StaticResource Bg2}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                  HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,24">
+            <ContentControl x:Name="PageContent" Focusable="False"/>
+          </Border>
+        </ScrollViewer>
       </Grid>
     </Grid>
 

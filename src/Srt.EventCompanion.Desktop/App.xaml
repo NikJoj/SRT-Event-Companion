@@ -193,6 +193,18 @@
       </Style.Triggers>
     </Style>
 
+    <!-- A step that is done: Prepare for event once the event's mods are all on the PC -->
+    <Style x:Key="ReadyBtn" TargetType="Button" BasedOn="{StaticResource SecondaryBtn}">
+      <Setter Property="Background" Value="#0F2A1B"/>
+      <Setter Property="BorderBrush" Value="#3DDC84"/>
+      <Setter Property="Foreground" Value="#3DDC84"/>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="BorderBrush" Value="#7BF0AE"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
     <Style x:Key="FavouriteChip" TargetType="Button" BasedOn="{StaticResource SecondaryBtn}">
       <Setter Property="Margin" Value="0,0,4,8"/>
       <Setter Property="Padding" Value="18,8"/>

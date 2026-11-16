@@ -60,12 +60,13 @@ public sealed record DiscordLinkStart(string Code, string Url, string PollToken,
 
 /// <summary>
 /// Where a Discord sign-in stands. Status: pending, done, error or expired. Outcome (when done): linked, pending-review
-/// (an admin must confirm an older SRT profile) or signed-in. Sign-in gives DriverToken (rig) or RigId/RigToken (own PC).
+/// (an admin must confirm an older SRT profile) or signed-in (NewProfile: SRT made a driver profile from their Discord). Sign-in gives DriverToken (rig) or RigId/RigToken (own PC).
 /// InGuild: whether they are in the SRT Discord server (null when SRT couldn't tell).
 /// </summary>
 public sealed record DiscordLinkPoll(string Status, string? Error = null, string? Outcome = null, string? DiscordUsername = null,
     bool? InGuild = null, string? InviteUrl = null, bool? Merged = null, bool? PendingReview = null, DriverMatch? Driver = null,
-    string? DriverToken = null, string? RigId = null, string? RigToken = null, string? SteamId = null, bool? MovedFromAnotherPc = null)
+    string? DriverToken = null, string? RigId = null, string? RigToken = null, string? SteamId = null, bool? MovedFromAnotherPc = null,
+    bool? NewProfile = null)
 {
     public bool IsDone => Status == "done";
     public bool IsFinished => Status is "done" or "error" or "expired";

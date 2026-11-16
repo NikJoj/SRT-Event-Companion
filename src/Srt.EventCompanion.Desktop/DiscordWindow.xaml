@@ -1,9 +1,8 @@
-<Window x:Class="Srt.EventCompanion.Desktop.DiscordWindow"
+<local:PageView x:Class="Srt.EventCompanion.Desktop.DiscordWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Discord · SRT Event Companion" Icon="pack://application:,,,/Assets/app.ico"
-        Width="600" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
-        Background="{StaticResource Bg2}" Foreground="{StaticResource Text}" FontFamily="{StaticResource BodyFont}"
+        xmlns:local="clr-namespace:Srt.EventCompanion.Desktop"
+        Width="600" Background="{StaticResource Bg2}" Foreground="{StaticResource Text}" FontFamily="{StaticResource BodyFont}"
         TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
   <Grid>
     <Border Style="{StaticResource CardAccent}"/>
@@ -28,8 +27,6 @@
           <Button x:Name="OpenHereBtn" Content="OPEN IN BROWSER" Style="{StaticResource SecondaryBtn}" HorizontalAlignment="Left" Click="OpenHere_Click"/>
           <TextBlock x:Name="SharedPcHint" Style="{StaticResource Hint}" Margin="0,6,0,0" Foreground="{StaticResource Gold}" Visibility="Collapsed"
                      Text="On a shared rig, sign out of Discord in the browser afterwards."/>
-          <TextBlock Text="CODE" Style="{StaticResource FieldLabel}" Margin="0,14,0,2"/>
-          <TextBlock x:Name="CodeText" FontFamily="{StaticResource MonoFont}" FontSize="20"/>
         </StackPanel>
       </Grid>
 
@@ -56,4 +53,4 @@
       </StackPanel>
     </StackPanel>
   </Grid>
-</Window>
+</local:PageView>
