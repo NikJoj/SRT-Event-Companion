@@ -60,7 +60,16 @@ var tests = new (string Name, Action Test)[]
     ("keeps setup choices; rigs from 1.0.x skip setup", KeepsAppSettings),
     ("reads an individual's PC and its owner from the rig config", ReadsIndividualRig),
     ("signs an individual up with an emailed code", SignsIndividualUp),
-    ("starts Discord sign-in and reads the result once it's done", RunsDiscordSignIn)
+    ("starts Discord sign-in and reads the result once it's done", RunsDiscordSignIn),
+    ("watches the game and ends a session only after it stays closed", WatchesGameAndCountsDown),
+    ("waits for a slow game start while Content Manager is open", WaitsForSlowGameStart),
+    ("holds a session open until the game runs again", HoldsSessionOpen),
+    ("builds the direct join link with car, name and password", BuildsDirectJoinLink),
+    ("reads the server's info and slots and picks this PC's car", PicksReservedSlot),
+    ("says so when the Steam account has no car on the server", NoSlotForSteamAccount),
+    ("keeps a rejoin's laps apart from the first game's", RejoinLapsHaveTheirOwnIds),
+    ("reads track IDs the way the SRT servers report them", ReadsServerTrackIds),
+    ("shows each event's series, round and race day in the picker", ShowsSeriesAndRoundInPicker)
 };
 
 var failures = 0;
@@ -1094,6 +1103,133 @@ static void RunsDiscordSignIn()
     // The owner of an individual's PC carries their linked Discord.
     AssertEqual("asha.k", System.Text.Json.JsonSerializer.Deserialize<RigOwner>("{\"profileId\":7,\"displayName\":\"Asha\",\"srtUsername\":\"asha\",\"discordUsername\":\"asha.k\"}",
         new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!.DiscordUsername!);
+}
+
+static void WatchesGameAndCountsDown()
+{
+    var t0 = new DateTimeOffset(2026, 11, 20, 18, 0, 0, TimeSpan.Zero);
+    var w = new SessionWatcher(t0);
+    AssertTrue(w.Observe(false, false, t0.AddSeconds(5)).Phase == GamePhase.Starting);
+    AssertTrue(w.Observe(true, true, t0.AddSeconds(30)).Phase == GamePhase.InGame);
+    AssertTrue(!w.Observe(true, false, t0.AddMinutes(20)).ShouldAutoEnd(t0.AddMinutes(20)));
+    // Game closed: countdown, not an immediate end.
+    var closed = w.Observe(false, true, t0.AddMinutes(30));
+    AssertTrue(closed.Phase == GamePhase.Away && closed.GameWasSeen);
+    AssertTrue(!closed.ShouldAutoEnd(t0.AddMinutes(31)));
+    // Driver rejoined on their own within the grace: countdown cancelled.
+    AssertTrue(w.Observe(true, true, t0.AddMinutes(31)).AutoEndAt is null);
+    // Closed for good: ends once the grace has passed.
+    w.Observe(false, false, t0.AddMinutes(40));
+    AssertTrue(!w.Observe(false, false, t0.AddMinutes(41)).ShouldAutoEnd(t0.AddMinutes(41)));
+    AssertTrue(w.Observe(false, false, t0.AddMinutes(42)).ShouldAutoEnd(t0.AddMinutes(42)));
+    // Rejoin restarts the wait for the game.
+    w.Relaunched(t0.AddMinutes(43));
+    AssertTrue(w.Observe(false, false, t0.AddMinutes(43).AddSeconds(10)).Phase == GamePhase.Starting);
+}
+
+static void WaitsForSlowGameStart()
+{
+    var t0 = new DateTimeOffset(2026, 11, 20, 18, 0, 0, TimeSpan.Zero);
+    var w = new SessionWatcher(t0);
+    // CM is open (downloading, or the driver is in its join window): keep waiting.
+    AssertTrue(w.Observe(false, true, t0.AddMinutes(5)).Phase == GamePhase.Starting);
+    // CM closed without the game ever starting: count down.
+    var away = w.Observe(false, false, t0.AddMinutes(6));
+    AssertTrue(away.Phase == GamePhase.Away && !away.GameWasSeen && away.AutoEndAt == t0.AddMinutes(8));
+    // A session picked up after an app restart counts down at once if the game isn't running.
+    var recovered = new SessionWatcher(t0, gameSeen: true);
+    AssertTrue(recovered.Observe(false, false, t0.AddSeconds(2)).Phase == GamePhase.Away);
+}
+
+static void HoldsSessionOpen()
+{
+    var t0 = new DateTimeOffset(2026, 11, 20, 18, 0, 0, TimeSpan.Zero);
+    var w = new SessionWatcher(t0, gameSeen: true);
+    w.Observe(false, false, t0);
+    w.Hold();
+    var held = w.Observe(false, false, t0.AddHours(1));
+    AssertTrue(held.Held && held.AutoEndAt is null && !held.ShouldAutoEnd(t0.AddHours(1)));
+    // Once the game has run again, the next close counts down as usual.
+    w.Observe(true, false, t0.AddHours(2));
+    AssertTrue(w.Observe(false, false, t0.AddHours(3)).AutoEndAt == t0.AddHours(3).AddMinutes(2));
+}
+
+static void BuildsDirectJoinLink()
+{
+    var plan = new DirectJoinPlan(IPAddress.Parse("15.235.182.31"), 9313, 8313, "spa", "rss_gtm_furiano_96_v6", "05_carbons", "Krw@1 1&x", "Nikhil Joji");
+    AssertEqual("acmanager://race/online?ip=15.235.182.31&port=9313&httpPort=8313&car=rss_gtm_furiano_96_v6&track=spa&name=Nikhil%20Joji&skin=05_carbons&plainPassword=Krw%401%201%26x",
+        plan.ToUri().AbsoluteUri);
+    // Fallback: CM's join window, with the password filled in.
+    AssertEqual("acmanager://race/online/join?httpPort=8313&ip=15.235.182.31&plainPassword=a%26b",
+        new OnlineJoinTarget(IPAddress.Parse("15.235.182.31"), 8313).ToUri("a&b").AbsoluteUri);
+}
+
+static void PicksReservedSlot()
+{
+    var info = ServerJoinResolver.ParseInfo("""{"ip":"","port":9313,"tport":9313,"cport":8313,"track":"ks_nordschleife-endurance","cars":["rss_gtm_furiano_96_v6"],"pass":true}""");
+    AssertTrue(info.TcpPort == 9313);
+    AssertEqual("ks_nordschleife-endurance", info.Track);
+    var slots = ServerJoinResolver.ParseSlots("""
+      {"Cars":[
+      {"Model":"rss_gtm_furiano_96_v6","Skin":"00_red","DriverName":"","IsConnected":true,"IsRequestedGUID":false,"IsEntryList":true},
+      {"Model":"rss_gtm_furiano_96_v6","Skin":"05_carbons","DriverName":"","IsConnected":false,"IsRequestedGUID":true,"IsEntryList":true},
+      {"Model":"ks_mazda_mx5_cup","Skin":"","IsConnected":false,"IsRequestedGUID":false,"IsEntryList":false}]}
+      """);
+    AssertEqual("05_carbons", ServerJoinResolver.ChooseSlot(slots, _ => true).Skin);
+    // Open server: first free open slot whose car is installed here.
+    var open = slots.Where(s => !s.IsReservedForYou).ToList();
+    AssertEqual("ks_mazda_mx5_cup", ServerJoinResolver.ChooseSlot(open, _ => true).Model);
+    AssertTrue(ServerJoinResolver.ParseInfo("""{"port":9600,"track":"monza"}""").TcpPort == 9600);
+}
+
+static void NoSlotForSteamAccount()
+{
+    var slots = ServerJoinResolver.ParseSlots("""{"Cars":[{"Model":"a","IsConnected":false,"IsRequestedGUID":false,"IsEntryList":true}]}""");
+    AssertThrowsInvalidOperation(() => ServerJoinResolver.ChooseSlot(slots, _ => true));
+    AssertThrowsInvalidOperation(() => ServerJoinResolver.ChooseSlot(Array.Empty<ServerSlot>(), _ => true));
+}
+
+static void RejoinLapsHaveTheirOwnIds()
+{
+    var at = new DateTimeOffset(2026, 11, 20, 18, 0, 0, TimeSpan.Zero);
+    AssertEqual("lap-1-90000", new CompletedLap(1, 90000, at, false, 0, 0, "spa", "x").SourceAttemptId);
+    AssertEqual("lap-r600-1-90000", new CompletedLap(1, 90000, at, false, 0, 0, "spa", "x", 600).SourceAttemptId);
+}
+
+static void ReadsServerTrackIds()
+{
+    // Exactly what the KRW and Track Nights servers' /INFO reported on 20 Nov 2026.
+    var krw = ServerJoinResolver.ParseInfo("""{"ip":"","port":9313,"cport":8313,"name":"Kerala Race Wars","track":"ks_silverstone-gp","cars":["rss_gtm_furiano_96_v6"],"pickup":true,"tport":9313}""");
+    AssertEqual("ks_silverstone-gp", krw.Track);
+    AssertEqual("ks_silverstone", ServerJoinResolver.TrackFolder(krw.Track));
+    var nights = ServerJoinResolver.ParseInfo("""{"ip":"","port":9027,"tport":9027,"cport":8027,"track":"csp/3465/../D/../mugello","cars":["ks_abarth500_assetto_corse"]}""");
+    AssertEqual("mugello", nights.Track);
+    AssertEqual("mugello", ServerJoinResolver.TrackFolder("csp/3465/../D/../mugello"));
+    AssertEqual("spa", ServerJoinResolver.TrackFolder("spa"));
+}
+
+static void ShowsSeriesAndRoundInPicker()
+{
+    var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent("""
+            {"rig":{"id":"KOC-R01","displayName":"Rig 1","centreId":"kochi","centreName":"Kochi"},
+             "events":[{"id":"krw-live","name":"KRW Practice","serverHost":"15.235.182.31","httpPort":8313,"serverPassword":null,"track":null,"car":null,
+               "audience":"centre","packages":[],
+               "series":{"id":"krw","name":"Kerala Race Wars","sim":"ac"},
+               "round":{"id":"krw-season-1-r3","number":3,"name":"Monza","track":"monza","raceDate":"2026-12-02","raceStart":"21:00","status":"practice"}},
+              {"id":"old","name":"Old server","serverHost":"1.2.3.4","httpPort":8000,"serverPassword":null,"track":"spa","car":null,"packages":[],"series":null,"round":null}]}
+            """)
+    });
+    var config = new RigApiClient(new RigCredential("https://srt.test", "KOC-R01", "token", "7656"), new HttpClient(handler)).GetConfigAsync().GetAwaiter().GetResult();
+    var krw = config.FindEvent("krw-live")!;
+    AssertEqual("Kerala Race Wars  ·  R3 Monza", EventChoice.Title(krw));
+    AssertEqual("Old server", EventChoice.Title(config.FindEvent("old")!));
+    AssertEqual("Race Wed 2 Dec, 21:00 IST", EventChoice.RaceLine(krw, new DateOnly(2026, 11, 20)));
+    AssertEqual("Race day today from 21:00 IST", EventChoice.RaceLine(krw, new DateOnly(2026, 12, 2)));
+    AssertTrue(EventChoice.RaceLine(krw, new DateOnly(2026, 12, 3)) is null);
+    AssertEqual("Race day today", EventChoice.RaceLine(krw with { Round = krw.Round! with { Status = "race_day" } }, new DateOnly(2026, 11, 20)));
+    AssertEqual("2026-11-21", EventChoice.TodayInIndia(new DateTimeOffset(2026, 11, 20, 18, 30, 0, TimeSpan.Zero)).ToString("yyyy-MM-dd"));
 }
 
 sealed class RaceIniFixture : IDisposable

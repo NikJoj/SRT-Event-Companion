@@ -6,7 +6,8 @@ namespace Srt.EventCompanion.Core;
 
 public sealed record OnlineJoinTarget(IPAddress ServerAddress, int HttpPort)
 {
-    public Uri ToUri()
+    /// <param name="password">Filled in for the driver in Content Manager's join dialog.</param>
+    public Uri ToUri(string? password = null)
     {
         if (ServerAddress.AddressFamily != AddressFamily.InterNetwork)
         {
@@ -20,7 +21,8 @@ public sealed record OnlineJoinTarget(IPAddress ServerAddress, int HttpPort)
 
         var builder = new UriBuilder("acmanager", "race", -1, "/online/join")
         {
-            Query = $"httpPort={HttpPort}&ip={ServerAddress}"
+            Query = $"httpPort={HttpPort}&ip={ServerAddress}" +
+                (string.IsNullOrEmpty(password) ? string.Empty : $"&plainPassword={Uri.EscapeDataString(password)}")
         };
         return builder.Uri;
     }
@@ -28,14 +30,17 @@ public sealed record OnlineJoinTarget(IPAddress ServerAddress, int HttpPort)
 
 public interface IContentManagerLauncher
 {
-    void Launch(OnlineJoinTarget target);
+    void Launch(Uri link);
 }
 
 public sealed class ContentManagerLauncher : IContentManagerLauncher
 {
-    public void Launch(OnlineJoinTarget target)
+    public void Launch(OnlineJoinTarget target) => Launch(target.ToUri());
+
+    /// <summary>Hands an acmanager:// link (join dialog or direct start) to Content Manager.</summary>
+    public void Launch(Uri link)
     {
-        var process = Process.Start(new ProcessStartInfo(target.ToUri().AbsoluteUri) { UseShellExecute = true });
+        var process = Process.Start(new ProcessStartInfo(link.AbsoluteUri) { UseShellExecute = true });
         if (process is null) throw new InvalidOperationException("Windows could not hand the join link to Content Manager.");
     }
 }

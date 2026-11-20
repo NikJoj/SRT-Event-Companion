@@ -15,8 +15,16 @@ public sealed record RigInfo(string Id, string DisplayName, string CentreId, str
 }
 
 /// <param name="Audience">Who the event is open to: "centre", "individual" or "all". SRT only sends events open to this PC.</param>
+/// <summary>The SRT Events series a server belongs to (Kerala Race Wars, SRT Track Nights…).</summary>
+public sealed record EventSeries(string Id, string Name, string? Sim = null);
+
+/// <summary>The round a server is serving now. RaceDate is yyyy-MM-dd and RaceStart HH:mm, both India time.</summary>
+public sealed record EventRound(string Id, int Number, string Name, string? Track = null, string? RaceDate = null, string? RaceStart = null,
+    string? Status = null);
+
+/// <param name="Series">Null when SRT is older than this app or the server isn't part of a series yet.</param>
 public sealed record EventServerConfig(string Id, string Name, string ServerHost, int HttpPort, string? ServerPassword, string? Track, string? Car,
-    IReadOnlyList<ContentPackage>? Packages = null, string? Audience = null)
+    IReadOnlyList<ContentPackage>? Packages = null, string? Audience = null, EventSeries? Series = null, EventRound? Round = null)
 {
     /// <summary>Mods this event requires (empty when none, or when SRT is older than this app).</summary>
     public IReadOnlyList<ContentPackage> RequiredContent => Packages ?? Array.Empty<ContentPackage>();

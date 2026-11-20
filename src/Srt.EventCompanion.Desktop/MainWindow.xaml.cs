@@ -41,6 +41,12 @@ public partial class MainWindow : Window, IPageNavigator
     private LapDetector _lapDetector = new();
     private ActiveRigSession? _recordingSession;
 
+    // Is the game still in use? Ends the session on its own when the game has been closed for a while.
+    private readonly DispatcherTimer _watchTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+    private SessionWatcher? _watcher;
+    private int _gameRun;          // 0 for the first game of a session; set afresh for each rejoin (see Rejoin_Click)
+    private bool _ending;
+
     // Set during initialisation
     private AssettoCorsaPaths? _acPaths;
     private RigCredential? _credential;
@@ -96,6 +102,7 @@ public partial class MainWindow : Window, IPageNavigator
         Closing += (_, e) => { if (_pages.Any(page => !page.CanAppClose())) e.Cancel = true; };
         _syncTimer.Tick += async (_, _) => await SyncTickAsync();
         _lapTimer.Tick += (_, _) => LapTick();
+        _watchTimer.Tick += async (_, _) => await WatchTickAsync();
         _resendTimer.Tick += (_, _) => UpdateResendButton();
         var built = System.Reflection.Assembly.GetExecutingAssembly()
             .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
@@ -179,6 +186,7 @@ public partial class MainWindow : Window, IPageNavigator
                 "Select End Session & Restore when the driver is finished. Assetto Corsa and Content Manager will be closed for you.");
             _ = ShowPasswordForActiveSessionAsync(active);
             StartLapRecording(active);
+            StartWatching(recovered: true);
             return;
         }
 
@@ -284,10 +292,13 @@ public partial class MainWindow : Window, IPageNavigator
         EventList.Items.Clear();
         foreach (var evt in events)
         {
-            var detail = string.Join("  ·  ", new[] { evt.Track, evt.Car }.Where(v => !string.IsNullOrWhiteSpace(v))
+            // With a series: the title says series and round, and the event (server) name moves into the detail line.
+            var detail = string.Join("  ·  ", new[] { evt.Series is null ? null : evt.Name, evt.Track, evt.Car,
+                    EventChoice.RaceLine(evt, EventChoice.TodayInIndia(DateTimeOffset.Now)) }
+                .Where(v => !string.IsNullOrWhiteSpace(v))
                 .Append(evt.RequiredContent.Count == 0 ? "no extra mods" : $"{evt.RequiredContent.Count} required mod(s)"));
             var content = new StackPanel();
-            content.Children.Add(new TextBlock { Text = evt.Name, FontFamily = (FontFamily)FindResource("BodySemiFont"), FontSize = 16 });
+            content.Children.Add(new TextBlock { Text = EventChoice.Title(evt), FontFamily = (FontFamily)FindResource("BodySemiFont"), FontSize = 16 });
             content.Children.Add(new TextBlock { Text = detail, Style = (Style)FindResource("Hint") });
             EventList.Items.Add(new ListBoxItem { Content = content, Tag = evt });
         }
@@ -308,7 +319,7 @@ public partial class MainWindow : Window, IPageNavigator
     private void SelectEvent(EventServerConfig? evt)
     {
         _selectedEvent = evt;
-        HeaderKicker.Text = evt is null ? "SIM RACING THARAVADU" : evt.Name.ToUpperInvariant();
+        HeaderKicker.Text = evt is null ? "SIM RACING THARAVADU" : EventChoice.Title(evt).ToUpperInvariant();
         if (evt is not null && !string.Equals(_settings.LastEventId, evt.Id, StringComparison.OrdinalIgnoreCase))
         {
             _settings = _settings with { LastEventId = evt.Id };
@@ -874,9 +885,11 @@ public partial class MainWindow : Window, IPageNavigator
         PreviewOutput.Text = previewText;
         LaunchHeading.Text = sessionActive ? "Session in progress" : "Ready to launch";
         LaunchHint.Text = sessionActive
-            ? "The driver is on the server. End the session here when they are done."
-            : "Review the details below, then launch Content Manager to begin the session.";
+            ? "The session ends by itself a couple of minutes after the game is closed. To get back on the server, select Rejoin server."
+            : "Review the details below, then select Join server. The game starts straight on the server.";
         LaunchBtn.Visibility = sessionActive ? Visibility.Collapsed : Visibility.Visible;
+        RejoinBtn.Visibility = sessionActive ? Visibility.Visible : Visibility.Collapsed;
+        GameStatePanel.Visibility = sessionActive ? Visibility.Visible : Visibility.Collapsed;
         EditDriverBtn.Visibility = sessionActive ? Visibility.Collapsed : Visibility.Visible;
         EndSessionBtn.Visibility = sessionActive ? Visibility.Visible : Visibility.Collapsed;
         UpdateSyncStatus(null);
@@ -948,7 +961,7 @@ public partial class MainWindow : Window, IPageNavigator
                         throw new InvalidOperationException($"{evt.Name} is no longer live. Select Edit driver, then Back, and choose another event.");
                     // Admins may have changed the server or added required content since the preview.
                     if (!await EnsureEventContentAsync(latestEvent))
-                        throw new InvalidOperationException("This event's mods are not all on this PC yet. Install them, or skip the ones already installed, then launch again.");
+                        throw new InvalidOperationException("This event's mods are not all on this PC yet. Install them, or skip the ones already installed, then join again.");
                     evt = _event = latestEvent;
                 }
             }
@@ -964,7 +977,7 @@ public partial class MainWindow : Window, IPageNavigator
                 SyncStatus.Text = "Closing Content Manager so the driver name can be changed…";
                 var stillOpen = await _gameProcesses.CloseAllAsync(TimeSpan.FromSeconds(10));
                 if (stillOpen.Count > 0)
-                    throw new InvalidOperationException($"Could not close {string.Join(", ", stillOpen)}. Close it manually, then select Launch again.");
+                    throw new InvalidOperationException($"Could not close {string.Join(", ", stillOpen)}. Close it manually, then select Join server again.");
             }
             var now = DateTimeOffset.Now;
 
@@ -999,19 +1012,21 @@ public partial class MainWindow : Window, IPageNavigator
             _activeSessionStore.Save(session);
 
             _outbox.Enqueue(IngestMessages.StartSession(_credential.RigId, session));
-            new ContentManagerLauncher().Launch(evt.ToJoinTarget());
+            _gameRun = 0;
+            var joined = await JoinServerAsync(evt, displayName);
 
             ShowLaunchStep(
-                $"✓ Content Manager launched.{Environment.NewLine}" +
+                $"✓ {joined}{Environment.NewLine}" +
                 $"Event:  {evt.Name}{Environment.NewLine}" +
                 $"Driver: {displayName}{(_driverEmail is null ? string.Empty : $" ({_driverEmail})")}{Environment.NewLine}{Environment.NewLine}" +
                 $"AC + CM names updated. Backups saved.{Environment.NewLine}" +
                 $"AC backup:  {raceBackup}{Environment.NewLine}" +
                 $"CM backup:  {cmBackup}{Environment.NewLine}{Environment.NewLine}" +
-                "When the driver is finished, select End Session & Restore.",
+                "When the driver is finished, select End Session & Restore, or just close the game.",
                 sessionActive: true);
             ShowPassword(evt.ServerPassword);
             StartLapRecording(session);
+            StartWatching(recovered: false);
             _ = SendHeartbeatAsync();
 
             await FlushOutboxAsync();
@@ -1021,8 +1036,9 @@ public partial class MainWindow : Window, IPageNavigator
             // If the names were already changed, stay on the session screen so staff can End Session & Restore.
             if (_activeSessionStore.Load() is { } started)
             {
-                ShowActiveSession(started, $"Session for {started.DisplayName} started, but Content Manager could not be opened.{Environment.NewLine}Open Content Manager manually, or select End Session & Restore to undo.");
+                ShowActiveSession(started, $"Session for {started.DisplayName} started, but the game could not be started.{Environment.NewLine}Select Rejoin server to try again, or End Session & Restore to undo.");
                 StartLapRecording(started);
+                StartWatching(recovered: true);
             }
             SetError(LaunchError, ex.Message);
         }
@@ -1032,10 +1048,16 @@ public partial class MainWindow : Window, IPageNavigator
         }
     }
 
-    private async void EndSession_Click(object sender, RoutedEventArgs e)
+    private async void EndSession_Click(object sender, RoutedEventArgs e) => await EndSessionAsync(automatic: false);
+
+    /// <param name="automatic">Ended by the watcher because the game stayed closed.</param>
+    private async Task EndSessionAsync(bool automatic)
     {
+        if (_ending) return;
+        _ending = true;
         LaunchError.Visibility = Visibility.Collapsed;
         EndSessionBtn.IsEnabled = false;
+        RejoinBtn.IsEnabled = false;
         try
         {
             var session = _activeSessionStore.Load()
@@ -1043,6 +1065,7 @@ public partial class MainWindow : Window, IPageNavigator
 
             // 1. Keep any lap finished in the last moment, then close the game and the launcher.
             //    Nothing can be logged after this point.
+            StopWatching();
             StopLapRecording(flush: true);
             SyncStatus.Text = "Closing Assetto Corsa and Content Manager…";
             var stillRunning = await _gameProcesses.CloseAllAsync(TimeSpan.FromSeconds(10));
@@ -1069,7 +1092,8 @@ public partial class MainWindow : Window, IPageNavigator
             LapPanel.Visibility = Visibility.Collapsed;
             ShowDriverStep();
             var lapCount = _laps.Count;
-            var summary = $"Session ended with {lapCount} lap(s) recorded. Rig name restored" + (outcome.FallbackNameUsed is null ? " from backup." : $" to \"{outcome.FallbackNameUsed}\" (backup was missing).");
+            var summary = (automatic ? "The game was closed, so the session was ended automatically. " : string.Empty) +
+                $"Session ended with {lapCount} lap(s) recorded. Rig name restored" + (outcome.FallbackNameUsed is null ? " from backup." : $" to \"{outcome.FallbackNameUsed}\" (backup was missing).");
             summary += flush is { Remaining: > 0 }
                 ? $" {flush.Remaining} item(s) are waiting for internet and will sync automatically."
                 : " All session data is synced with SRT.";
@@ -1082,25 +1106,190 @@ public partial class MainWindow : Window, IPageNavigator
         {
             SetError(LaunchError, ex.Message);
             UpdateSyncStatus(null);
+            // Still a session: keep watching, so a failed automatic end is tried again by staff or the next countdown.
+            if (_activeSessionStore.Load() is not null) StartWatching(recovered: true);
         }
         finally
         {
             EndSessionBtn.IsEnabled = true;
+            RejoinBtn.IsEnabled = true;
+            _ending = false;
         }
+    }
+
+    // ── Joining the server ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Starts the game straight on the event's server through Content Manager (acmanager://race/online), with the
+    /// car this PC's Steam account may drive, the driver's name and the server password. If the server can't be asked
+    /// which car that is, falls back to Content Manager's join window with the password filled in.
+    /// Returns a line for the session screen.
+    /// </summary>
+    private async Task<string> JoinServerAsync(EventServerConfig evt, string displayName)
+    {
+        var target = evt.ToJoinTarget();
+        var launcher = new ContentManagerLauncher();
+        string? fallbackReason;
+        try
+        {
+            if (_credential is null) throw new InvalidOperationException("This PC is not signed in.");
+            SyncStatus.Text = "Asking the server which car is yours…";
+            var installDir = RequirePaths().InstallDirectory;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            var plan = await ServerJoinResolver.ResolveAsync(Http, target, _credential.SteamId, displayName, evt.ServerPassword,
+                car => Directory.Exists(Path.Combine(installDir, "content", "cars", car)),
+                track => Directory.Exists(Path.Combine(installDir, "content", "tracks", track)), timeout.Token);
+            launcher.Launch(plan.ToUri());
+            UpdateSyncStatus(null);
+            return $"Starting Assetto Corsa on {evt.Name}: {plan.Car} at {plan.Track}.";
+        }
+        catch (NoSlotException ex) { fallbackReason = ex.Message; }
+        catch (ContentMissingException ex) { fallbackReason = ex.Message + " Content Manager can download it from the join window."; }
+        catch (Exception) { fallbackReason = "The server didn't answer, so the game couldn't be started directly."; }
+
+        launcher.Launch(target.ToUri(evt.ServerPassword));
+        UpdateSyncStatus(null);
+        return $"Content Manager's join window is open for {evt.Name}, with the password filled in. Select Join there.{Environment.NewLine}({fallbackReason})";
+    }
+
+    private async void Rejoin_Click(object sender, RoutedEventArgs e)
+    {
+        LaunchError.Visibility = Visibility.Collapsed;
+        var session = _activeSessionStore.Load();
+        if (session is null) { SetError(LaunchError, "There is no active session to rejoin."); return; }
+        if (_gameProcesses.IsGameRunning() && MessageBox.Show(this,
+                "Assetto Corsa is still running. Close it and join the server again?\n\nLaps already driven are kept.",
+                "Rejoin server", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
+            return;
+
+        RejoinBtn.IsEnabled = false;
+        EndSessionBtn.IsEnabled = false;
+        try
+        {
+            // The watcher must not end the session while the game is closed for the rejoin.
+            _watcher?.Relaunched(DateTimeOffset.Now);
+            if (_gameProcesses.IsAnyRunning())
+            {
+                SyncStatus.Text = "Closing Assetto Corsa and Content Manager…";
+                var stillOpen = await _gameProcesses.CloseAllAsync(TimeSpan.FromSeconds(10));
+                if (stillOpen.Count > 0)
+                    throw new InvalidOperationException($"Could not close {string.Join(", ", stillOpen)}. Close it manually, then select Rejoin server again.");
+            }
+
+            // The admin may have changed the server or its password since the session started.
+            var evt = _event;
+            if (_api is not null)
+            {
+                try
+                {
+                    _config = await _api.GetConfigAsync();
+                    evt = _config.FindEvent(session.EventId) ?? evt;
+                }
+                catch { /* offline: use what we have */ }
+            }
+            if (evt is null) throw new InvalidOperationException("This session's event is no longer live, so there is no server to rejoin. End the session.");
+            _event = evt;
+
+            // Content Manager writes its settings back when it closes; make sure the driver's name is still in place.
+            try
+            {
+                if (_cmSettings.ReadPlayerName(session.ContentManagerValuesPath) != session.DisplayName)
+                    _cmSettings.ApplyPlayerNameChange(session.ContentManagerValuesPath, session.DisplayName, DateTimeOffset.Now);
+            }
+            catch { /* the name is also passed to the game directly */ }
+
+            // A new game counts laps from 1 again; keep them apart from the first game's laps.
+            StopLapRecording(flush: true);
+            // Seconds since the session started: unique for each rejoin, even across an app restart.
+            _gameRun = Math.Max(1, (int)(DateTimeOffset.Now - session.StartedAt).TotalSeconds);
+            StartLapRecording(session, keepLaps: true);
+
+            var joined = await JoinServerAsync(evt, session.DisplayName);
+            _watcher?.Relaunched(DateTimeOffset.Now);
+            ShowPassword(evt.ServerPassword);
+            SyncStatus.Text = joined;
+        }
+        catch (Exception ex)
+        {
+            SetError(LaunchError, ex.Message);
+        }
+        finally
+        {
+            RejoinBtn.IsEnabled = true;
+            EndSessionBtn.IsEnabled = true;
+        }
+    }
+
+    // ── Watching the game ────────────────────────────────────────────────────
+
+    private void StartWatching(bool recovered)
+    {
+        // After an app restart there is no fresh launch to wait for: if the game isn't running, count down at once.
+        _watcher = new SessionWatcher(DateTimeOffset.Now, gameSeen: recovered);
+        _watchTimer.Start();
+        _ = WatchTickAsync();
+    }
+
+    private void StopWatching()
+    {
+        _watchTimer.Stop();
+        _watcher = null;
+    }
+
+    private void HoldSession_Click(object sender, RoutedEventArgs e)
+    {
+        _watcher?.Hold();
+        _ = WatchTickAsync();
+    }
+
+    private async Task WatchTickAsync()
+    {
+        if (_watcher is null || _ending) return;
+        var now = DateTimeOffset.Now;
+        var status = _watcher.Observe(_gameProcesses.IsGameRunning(), _gameProcesses.IsLauncherRunning(), now);
+
+        HoldSessionBtn.Visibility = status.AutoEndAt is null ? Visibility.Collapsed : Visibility.Visible;
+        switch (status.Phase)
+        {
+            case GamePhase.Starting:
+                GameStateText.Text = "Starting Assetto Corsa…";
+                GameStateDetail.Text = "Content Manager is loading the game.";
+                break;
+            case GamePhase.InGame:
+                GameStateText.Text = "● In game";
+                GameStateDetail.Text = "Close the game or select End Session & Restore when the driver is done.";
+                break;
+            case GamePhase.Away when status.Held:
+                GameStateText.Text = status.GameWasSeen ? "Game closed · session kept open" : "Game not started · session kept open";
+                GameStateDetail.Text = "Select Rejoin server to drive again, or End Session & Restore when done.";
+                break;
+            case GamePhase.Away:
+                var left = status.AutoEndAt!.Value - now;
+                if (left < TimeSpan.Zero) left = TimeSpan.Zero;
+                GameStateText.Text = (status.GameWasSeen ? "Game closed" : "The game didn't start") +
+                                     $" · session ends in {(int)left.TotalMinutes}:{left.Seconds:00}";
+                GameStateDetail.Text = "Select Rejoin server to get back on, or Keep open to wait.";
+                break;
+        }
+
+        if (status.ShouldAutoEnd(now) && _activeSessionStore.Load() is not null)
+            await EndSessionAsync(automatic: true);
     }
 
     // ── Lap timing ───────────────────────────────────────────────────────────
 
-    private void StartLapRecording(ActiveRigSession session)
+    /// <param name="keepLaps">Rejoin: same session, new game. Keep the laps so far and number this game's laps apart.</param>
+    private void StartLapRecording(ActiveRigSession session, bool keepLaps = false)
     {
         if (_recordingSession?.SessionId == session.SessionId && _lapTimer.IsEnabled) return;
         _recordingSession = session;
-        _laps.Clear();
-        _lapDetector = new LapDetector();
+        if (!keepLaps) _laps.Clear();
+        _lapDetector = new LapDetector(_gameRun);
         _acReader ??= new AcSharedMemoryReader();
         LapPanel.Visibility = Visibility.Visible;
         LapStatus.Text = "Waiting for Assetto Corsa…";
         UpdateLapSummary();
+        LapPanel.Visibility = Visibility.Visible;
         _lapTimer.Start();
     }
 

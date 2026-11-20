@@ -9,6 +9,11 @@ public sealed class GameProcessController
     private static readonly string[] GameProcessNames = { "acs", "acs_x86", "AssettoCorsa" };
     private static readonly string[] LauncherProcessNames = { "Content Manager" };
 
+    /// <summary>Assetto Corsa itself is running: the driver is in the game (on track, in the pits or loading).</summary>
+    public bool IsGameRunning() => GameProcessNames.Any(name => Process.GetProcessesByName(name).Length > 0);
+
+    public bool IsLauncherRunning() => LauncherProcessNames.Any(name => Process.GetProcessesByName(name).Length > 0);
+
     public bool IsAnyRunning() => GameProcessNames.Concat(LauncherProcessNames).Any(name => Process.GetProcessesByName(name).Length > 0);
 
     /// <summary>

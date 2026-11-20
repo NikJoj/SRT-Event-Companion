@@ -289,7 +289,7 @@
               <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="2.  The driver opens the email on their phone and reads out the 6-digit code. It works for 10 minutes."/>
               <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="3.  First time with this email? Enter the name to show on the leaderboard."/>
               <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="4.  Optional: Link Discord. Next time the driver can sign in with Discord instead of waiting for an email."/>
-              <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="5.  Preview, then Launch. Each sign-in is good for one session."/>
+              <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="5.  Preview, then Join server. Each sign-in is good for one session."/>
               <TextBlock Style="{StaticResource Hint}" Margin="0,18,0,0"
                          Text="Prefer Discord? Select Sign in with Discord and let the driver scan the QR code with their phone. SRT drivers who signed in on the website with Discord get their existing profile."/>
               <TextBlock Style="{StaticResource Hint}" Margin="0,18,0,0"
@@ -318,7 +318,24 @@
               <TextBlock Text="SESSION" Style="{StaticResource Kicker}"/>
               <TextBlock x:Name="LaunchHeading" Text="READY TO LAUNCH" Style="{StaticResource StepHeading}"/>
               <TextBlock x:Name="LaunchHint" Style="{StaticResource Hint}" Margin="0,0,0,18"
-                         Text="Review the details below, then launch Content Manager to begin the session."/>
+                         Text="Review the details below, then select Join server. The game starts straight on the server."/>
+
+              <Border x:Name="GameStatePanel" Visibility="Collapsed" Background="#10161D" BorderBrush="#2A3340"
+                      BorderThickness="1" Padding="18,14" Margin="0,0,0,16">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <StackPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="GameStateText" Text="Starting Assetto Corsa…" Foreground="White" FontSize="18"
+                               FontFamily="{StaticResource BodySemiFont}" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="GameStateDetail" Style="{StaticResource Hint}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                  </StackPanel>
+                  <Button x:Name="HoldSessionBtn" Grid.Column="1" Content="KEEP OPEN" Style="{StaticResource SecondaryBtn}"
+                          Click="HoldSession_Click" Visibility="Collapsed" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                </Grid>
+              </Border>
 
               <Border x:Name="PasswordPanel" Visibility="Collapsed" Background="#17120A" BorderBrush="{StaticResource Gold}"
                       BorderThickness="1" Padding="18,14" Margin="0,0,0,16">
@@ -334,7 +351,7 @@
                     <Button Grid.Column="1" Content="COPY" Style="{StaticResource SecondaryBtn}" Click="CopyPassword_Click"/>
                   </Grid>
                   <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
-                             Text="Content Manager asks for this when joining. Type or paste it there."/>
+                             Text="Filled in for you when the game starts. If Content Manager ever asks for it, paste it there."/>
                 </StackPanel>
               </Border>
 
@@ -356,8 +373,9 @@
 
           <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button x:Name="EditDriverBtn" Content="←  EDIT DRIVER" Style="{StaticResource SecondaryBtn}" Click="BackToDriver_Click" Margin="0,0,8,0"/>
+            <Button x:Name="RejoinBtn" Content="↻  REJOIN SERVER" Style="{StaticResource SecondaryBtn}" Click="Rejoin_Click" Margin="0,0,8,0" Visibility="Collapsed"/>
             <Button x:Name="EndSessionBtn" Content="END SESSION &amp; RESTORE" Style="{StaticResource PrimaryBtn}" Click="EndSession_Click" Margin="0,0,8,0"/>
-            <Button x:Name="LaunchBtn" Content="LAUNCH CONTENT MANAGER" Style="{StaticResource PrimaryBtn}" Click="Launch_Click"/>
+            <Button x:Name="LaunchBtn" Content="JOIN SERVER" Style="{StaticResource PrimaryBtn}" Click="Launch_Click"/>
           </StackPanel>
         </Grid>
 

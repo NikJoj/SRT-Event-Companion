@@ -20,10 +20,10 @@ public sealed record AcTelemetrySample(
     string? Car);
 
 /// <summary>A completed lap, ready to send to SRT.</summary>
-public sealed record CompletedLap(int LapNumber, int LapTimeMs, DateTimeOffset CapturedAt, bool TouchedPits, int MaxTyresOut, int SessionType, string? Track, string? Car)
+public sealed record CompletedLap(int LapNumber, int LapTimeMs, DateTimeOffset CapturedAt, bool TouchedPits, int MaxTyresOut, int SessionType, string? Track, string? Car, int Run = 0)
 {
     /// <summary>Stable per lap so a resend is recognised as the same lap by SRT.</summary>
-    public string SourceAttemptId => $"lap-{LapNumber}-{LapTimeMs}";
+    public string SourceAttemptId => Run == 0 ? $"lap-{LapNumber}-{LapTimeMs}" : $"lap-r{Run}-{LapNumber}-{LapTimeMs}";
 
     /// <summary>AC's own session type on the server (practice, qualify, race…), kept for reference.</summary>
     public string SessionTypeName => SessionType switch
@@ -45,6 +45,11 @@ public sealed class LapDetector
     private bool _touchedPits;
     private int _maxTyresOut;
     private PendingLap? _pending;
+    private readonly int _run;
+
+    /// <param name="run">0 for the first game launch of a session, then 1, 2… after each rejoin. AC counts laps from 1
+    /// again in a new game, so the run keeps a rejoin's lap 1 apart from the first game's lap 1.</param>
+    public LapDetector(int run = 0) => _run = run;
 
     public CompletedLap? Observe(AcTelemetrySample sample, DateTimeOffset now)
     {
@@ -96,7 +101,7 @@ public sealed class LapDetector
         _lastLapMsAtCount = sample.LastLapMs;
         if (sample.LastLapMs <= 0) return null;
         return new CompletedLap(pending.LapNumber, sample.LastLapMs, pending.CountedAt, pending.TouchedPits, pending.MaxTyresOut,
-            sample.SessionType, sample.Track, sample.Car);
+            sample.SessionType, sample.Track, sample.Car, _run);
     }
 
     private void Track(AcTelemetrySample sample)
