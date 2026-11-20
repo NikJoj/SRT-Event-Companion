@@ -57,6 +57,31 @@ public static class EventChoice
     public static EventServerConfig? Default(IReadOnlyList<EventServerConfig> liveEvents, string? lastEventId) =>
         liveEvents.FirstOrDefault(e => string.Equals(e.Id, lastEventId, StringComparison.OrdinalIgnoreCase)) ?? liveEvents.FirstOrDefault();
 
+    /// <summary>
+    /// The event's title in the picker: "Kerala Race Wars · R3 Monza" when SRT says which series and round the server
+    /// is serving, else the event's own name.
+    /// </summary>
+    public static string Title(EventServerConfig evt) =>
+        evt.Series is null ? evt.Name
+        : evt.Round is null ? evt.Series.Name
+        : $"{evt.Series.Name}  ·  R{evt.Round.Number} {evt.Round.Name}";
+
+    /// <summary>
+    /// When the race is, for the picker: "Race day today from 21:00", "Race Wed 3 Dec, 21:00", or null when there is no
+    /// race date. <paramref name="today"/> is today's date in India.
+    /// </summary>
+    public static string? RaceLine(EventServerConfig evt, DateOnly today)
+    {
+        if (evt.Round is not { } round) return null;
+        if (round.Status == "race_day") return "Race day today";
+        if (!DateOnly.TryParseExact(round.RaceDate, "yyyy-MM-dd", out var date) || date < today) return null;
+        var time = string.IsNullOrWhiteSpace(round.RaceStart) ? string.Empty : $" from {round.RaceStart} IST";
+        return date == today ? $"Race day today{time}" : $"Race {date:ddd d MMM}{(time.Length == 0 ? string.Empty : "," + time.Replace(" from", string.Empty))}";
+    }
+
+    /// <summary>Today's date in India, where race days are set.</summary>
+    public static DateOnly TodayInIndia(DateTimeOffset now) => DateOnly.FromDateTime(now.ToOffset(TimeSpan.FromMinutes(330)).DateTime);
+
     /// <summary>One line for the event list: name, then track and car when set.</summary>
     public static string Describe(EventServerConfig evt)
     {
